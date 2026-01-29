@@ -1,7 +1,24 @@
-/// Provider-specific embedding clients for generating vectors.
+/// Provider-agnostic embedding trait for generating vectors from text.
 use async_trait::async_trait;
 
 #[async_trait]
 pub trait EmbeddingProvider: Send + Sync {
+    /// Generate an embedding for a single text.
     async fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>>;
+
+    /// Generate embeddings for a batch of texts.
+    /// Default implementation calls `embed` sequentially.
+    async fn embed_batch(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        let mut results = Vec::with_capacity(texts.len());
+        for text in texts {
+            results.push(self.embed(text).await?);
+        }
+        Ok(results)
+    }
+
+    /// The model name used by this provider (e.g. "text-embedding-3-small").
+    fn model_name(&self) -> &str;
+
+    /// The dimensionality of the embeddings produced.
+    fn dimensions(&self) -> usize;
 }

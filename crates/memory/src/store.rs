@@ -1,4 +1,50 @@
-/// SQLite-backed memory store with vector extension.
-pub struct MemoryStore {
-    // TODO: sqlx::SqlitePool
+/// Storage abstraction for memory files, chunks, and embedding cache.
+use async_trait::async_trait;
+
+use crate::schema::{ChunkRow, FileRow};
+use crate::search::SearchResult;
+
+#[async_trait]
+pub trait MemoryStore: Send + Sync {
+    // ---- files ----
+    async fn upsert_file(&self, file: &FileRow) -> anyhow::Result<()>;
+    async fn get_file(&self, path: &str) -> anyhow::Result<Option<FileRow>>;
+    async fn delete_file(&self, path: &str) -> anyhow::Result<()>;
+    async fn list_files(&self) -> anyhow::Result<Vec<FileRow>>;
+
+    // ---- chunks ----
+    async fn upsert_chunks(&self, chunks: &[ChunkRow]) -> anyhow::Result<()>;
+    async fn get_chunks_for_file(&self, path: &str) -> anyhow::Result<Vec<ChunkRow>>;
+    async fn delete_chunks_for_file(&self, path: &str) -> anyhow::Result<()>;
+    async fn get_chunk_by_id(&self, id: &str) -> anyhow::Result<Option<ChunkRow>>;
+
+    // ---- embedding cache ----
+    async fn get_cached_embedding(
+        &self,
+        provider: &str,
+        model: &str,
+        hash: &str,
+    ) -> anyhow::Result<Option<Vec<f32>>>;
+
+    async fn put_cached_embedding(
+        &self,
+        provider: &str,
+        model: &str,
+        provider_key: &str,
+        hash: &str,
+        embedding: &[f32],
+    ) -> anyhow::Result<()>;
+
+    // ---- search ----
+    async fn vector_search(
+        &self,
+        query_embedding: &[f32],
+        limit: usize,
+    ) -> anyhow::Result<Vec<SearchResult>>;
+
+    async fn keyword_search(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<SearchResult>>;
 }

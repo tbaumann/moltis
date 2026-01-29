@@ -1855,12 +1855,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "moltis-agents",
  "moltis-common",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
+ "tempfile",
  "tokio",
  "tracing",
+ "walkdir",
 ]
 
 [[package]]
