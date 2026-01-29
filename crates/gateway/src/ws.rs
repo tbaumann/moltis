@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket};
@@ -7,22 +9,28 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use moltis_protocol::{
-    error_codes, ConnectParams, ErrorShape, EventFrame, GatewayFrame, HelloOk,
-    Policy, ResponseFrame, ServerInfo, Features, HANDSHAKE_TIMEOUT_MS, PROTOCOL_VERSION,
+    error_codes, ConnectParams, ErrorShape, EventFrame, GatewayFrame, HelloAuth, HelloOk, Policy,
+    ResponseFrame, ServerInfo, Features, HANDSHAKE_TIMEOUT_MS, MAX_PAYLOAD_BYTES,
+    PROTOCOL_VERSION,
 };
 
+use crate::auth;
+use crate::broadcast::{broadcast, BroadcastOpts};
 use crate::methods::{MethodContext, MethodRegistry};
+use crate::nodes::NodeSession;
 use crate::state::{ConnectedClient, GatewayState};
 
 /// Handle a single WebSocket connection through its full lifecycle:
-/// handshake → message loop → cleanup.
+/// handshake (with auth) → message loop → cleanup.
 pub async fn handle_connection(
     socket: WebSocket,
     state: Arc<GatewayState>,
     methods: Arc<MethodRegistry>,
+    remote_addr: SocketAddr,
 ) {
     let conn_id = uuid::Uuid::new_v4().to_string();
-    info!(conn_id = %conn_id, "ws: new connection");
+    let remote_ip = remote_addr.ip().to_string();
+    info!(conn_id = %conn_id, remote_ip = %remote_ip, "ws: new connection");
 
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (client_tx, mut client_rx) = mpsc::unbounded_channel::<String>();
@@ -40,77 +48,13 @@ pub async fn handle_connection(
 
     // ── Handshake phase ──────────────────────────────────────────────────
 
-    // Wait for the first message (must be a `connect` request).
-    let connect_params = match tokio::time::timeout(
+    let connect_result = match tokio::time::timeout(
         std::time::Duration::from_millis(HANDSHAKE_TIMEOUT_MS),
         wait_for_connect(&mut ws_rx),
     )
     .await
     {
-        Ok(Ok((request_id, params))) => {
-            // Validate protocol version.
-            if params.min_protocol > PROTOCOL_VERSION || params.max_protocol < PROTOCOL_VERSION {
-                let err = ResponseFrame::err(
-                    &request_id,
-                    ErrorShape::new(
-                        error_codes::INVALID_REQUEST,
-                        format!(
-                            "protocol mismatch: server={}, client={}-{}",
-                            PROTOCOL_VERSION, params.min_protocol, params.max_protocol
-                        ),
-                    ),
-                );
-                let _ = client_tx.send(serde_json::to_string(&err).unwrap());
-                drop(client_tx);
-                write_handle.abort();
-                return;
-            }
-
-            // Build and send HelloOk.
-            let hello = HelloOk {
-                r#type: "hello-ok".into(),
-                protocol: PROTOCOL_VERSION,
-                server: ServerInfo {
-                    version: state.version.clone(),
-                    commit: None,
-                    host: Some(state.hostname.clone()),
-                    conn_id: conn_id.clone(),
-                },
-                features: Features {
-                    methods: methods.method_names(),
-                    events: vec![
-                        "tick".into(),
-                        "shutdown".into(),
-                        "agent".into(),
-                        "chat".into(),
-                        "presence".into(),
-                        "health".into(),
-                        "exec.approval.requested".into(),
-                        "exec.approval.resolved".into(),
-                        "device.pair.requested".into(),
-                        "device.pair.resolved".into(),
-                        "node.pair.requested".into(),
-                        "node.pair.resolved".into(),
-                        "node.invoke.request".into(),
-                    ],
-                },
-                snapshot: serde_json::json!({}),
-                canvas_host_url: None,
-                auth: None,
-                policy: Policy::default_policy(),
-            };
-            let resp = ResponseFrame::ok(&request_id, serde_json::to_value(&hello).unwrap());
-            let _ = client_tx.send(serde_json::to_string(&resp).unwrap());
-
-            info!(
-                conn_id = %conn_id,
-                client_id = %params.client.id,
-                client_version = %params.client.version,
-                role = params.role.as_deref().unwrap_or("operator"),
-                "ws: handshake complete"
-            );
-            params
-        }
+        Ok(Ok(result)) => result,
         Ok(Err(e)) => {
             warn!(conn_id = %conn_id, error = %e, "ws: handshake failed");
             drop(client_tx);
@@ -125,31 +69,218 @@ pub async fn handle_connection(
         }
     };
 
+    let (request_id, params) = connect_result;
+
+    // Validate protocol version.
+    if params.min_protocol > PROTOCOL_VERSION || params.max_protocol < PROTOCOL_VERSION {
+        let err = ResponseFrame::err(
+            &request_id,
+            ErrorShape::new(
+                error_codes::INVALID_REQUEST,
+                format!(
+                    "protocol mismatch: server={}, client={}-{}",
+                    PROTOCOL_VERSION, params.min_protocol, params.max_protocol
+                ),
+            ),
+        );
+        let _ = client_tx.send(serde_json::to_string(&err).unwrap());
+        drop(client_tx);
+        write_handle.abort();
+        return;
+    }
+
+    // ── Auth validation ──────────────────────────────────────────────────
+    // If auth is configured (token or password set), validate credentials.
+    let is_loopback = auth::is_loopback(&remote_ip);
+    let has_auth_configured =
+        state.auth.token.is_some() || state.auth.password.is_some();
+
+    let (role, scopes) = if has_auth_configured && !is_loopback {
+        let provided_token = params.auth.as_ref().and_then(|a| a.token.as_deref());
+        let provided_password = params.auth.as_ref().and_then(|a| a.password.as_deref());
+        let auth_result =
+            auth::authorize_connect(&state.auth, provided_token, provided_password, Some(&remote_ip));
+
+        if !auth_result.ok {
+            warn!(
+                conn_id = %conn_id,
+                reason = auth_result.reason.as_deref().unwrap_or("unknown"),
+                "ws: auth failed"
+            );
+            let err = ResponseFrame::err(
+                &request_id,
+                ErrorShape::new(error_codes::INVALID_REQUEST, "authentication failed"),
+            );
+            let _ = client_tx.send(serde_json::to_string(&err).unwrap());
+            drop(client_tx);
+            write_handle.abort();
+            return;
+        }
+
+        // Use role/scopes from connect params, defaulting sensibly.
+        let role = params.role.clone().unwrap_or_else(|| "operator".into());
+        let scopes = params.scopes.clone().unwrap_or_else(|| {
+            vec![
+                "operator.admin".into(),
+                "operator.read".into(),
+                "operator.write".into(),
+                "operator.approvals".into(),
+                "operator.pairing".into(),
+            ]
+        });
+        (role, scopes)
+    } else {
+        // No auth configured or loopback — grant full access.
+        let role = params.role.clone().unwrap_or_else(|| "operator".into());
+        let scopes = params.scopes.clone().unwrap_or_else(|| {
+            vec![
+                "operator.admin".into(),
+                "operator.read".into(),
+                "operator.write".into(),
+                "operator.approvals".into(),
+                "operator.pairing".into(),
+            ]
+        });
+        (role, scopes)
+    };
+
+    // Build HelloOk with auth info.
+    let hello_auth = HelloAuth {
+        device_token: String::new(),
+        role: role.clone(),
+        scopes: scopes.clone(),
+        issued_at_ms: Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        ),
+    };
+
+    let hello = HelloOk {
+        r#type: "hello-ok".into(),
+        protocol: PROTOCOL_VERSION,
+        server: ServerInfo {
+            version: state.version.clone(),
+            commit: None,
+            host: Some(state.hostname.clone()),
+            conn_id: conn_id.clone(),
+        },
+        features: Features {
+            methods: methods.method_names(),
+            events: vec![
+                "tick".into(),
+                "shutdown".into(),
+                "agent".into(),
+                "chat".into(),
+                "presence".into(),
+                "health".into(),
+                "exec.approval.requested".into(),
+                "exec.approval.resolved".into(),
+                "device.pair.requested".into(),
+                "device.pair.resolved".into(),
+                "node.pair.requested".into(),
+                "node.pair.resolved".into(),
+                "node.invoke.request".into(),
+            ],
+        },
+        snapshot: serde_json::json!({}),
+        canvas_host_url: None,
+        auth: Some(hello_auth),
+        policy: Policy::default_policy(),
+    };
+    let resp = ResponseFrame::ok(&request_id, serde_json::to_value(&hello).unwrap());
+    let _ = client_tx.send(serde_json::to_string(&resp).unwrap());
+
+    info!(
+        conn_id = %conn_id,
+        client_id = %params.client.id,
+        client_version = %params.client.version,
+        role = %role,
+        "ws: handshake complete"
+    );
+
     // Register the client.
+    let now = std::time::Instant::now();
     let client = ConnectedClient {
         conn_id: conn_id.clone(),
-        connect_params,
+        connect_params: params.clone(),
         sender: client_tx.clone(),
-        connected_at: std::time::Instant::now(),
+        connected_at: now,
+        last_activity: now,
     };
-    let role = client.role().to_string();
-    let scopes: Vec<String> = client.scopes().iter().map(|s| s.to_string()).collect();
     state.register_client(client).await;
+
+    // If node role, register in node registry.
+    if role == "node" {
+        let caps = params.caps.clone().unwrap_or_default();
+        let commands = params.commands.clone().unwrap_or_default();
+        let permissions: HashMap<String, bool> = params
+            .permissions
+            .as_ref()
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_bool().map(|b| (k.clone(), b)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let node = NodeSession {
+            node_id: params.client.id.clone(),
+            conn_id: conn_id.clone(),
+            display_name: params.client.display_name.clone(),
+            platform: params.client.platform.clone(),
+            version: params.client.version.clone(),
+            capabilities: caps,
+            commands,
+            permissions,
+            path_env: params.path_env.clone(),
+            remote_ip: Some(remote_ip.clone()),
+            connected_at: now,
+        };
+        state.nodes.write().await.register(node);
+        info!(conn_id = %conn_id, node_id = %params.client.id, "node registered");
+
+        // Broadcast presence change.
+        broadcast(
+            &state,
+            "presence",
+            serde_json::json!({
+                "type": "node.connected",
+                "nodeId": params.client.id,
+                "platform": params.client.platform,
+            }),
+            BroadcastOpts::default(),
+        )
+        .await;
+    }
 
     // ── Message loop ─────────────────────────────────────────────────────
 
     while let Some(msg) = ws_rx.next().await {
-        let msg = match msg {
+        let text = match msg {
             Ok(Message::Text(t)) => t.to_string(),
             Ok(Message::Close(_)) => break,
-            Ok(_) => continue, // ignore binary/ping/pong
+            Ok(_) => continue,
             Err(e) => {
                 debug!(conn_id = %conn_id, error = %e, "ws: read error");
                 break;
             }
         };
 
-        let frame: GatewayFrame = match serde_json::from_str(&msg) {
+        // Enforce payload size limit.
+        if text.len() > MAX_PAYLOAD_BYTES {
+            warn!(conn_id = %conn_id, size = text.len(), "ws: payload too large");
+            let err = EventFrame::new(
+                "error",
+                serde_json::json!({ "message": "payload too large", "maxBytes": MAX_PAYLOAD_BYTES }),
+                state.next_seq(),
+            );
+            let _ = client_tx.send(serde_json::to_string(&err).unwrap());
+            continue;
+        }
+
+        let frame: GatewayFrame = match serde_json::from_str(&text) {
             Ok(f) => f,
             Err(e) => {
                 warn!(conn_id = %conn_id, error = %e, "ws: invalid frame");
@@ -162,6 +293,11 @@ pub async fn handle_connection(
                 continue;
             }
         };
+
+        // Touch activity timestamp.
+        if let Some(client) = state.clients.write().await.get_mut(&conn_id) {
+            client.touch();
+        }
 
         match frame {
             GatewayFrame::Request(req) => {
@@ -178,13 +314,28 @@ pub async fn handle_connection(
                 let _ = client_tx.send(serde_json::to_string(&response).unwrap());
             }
             _ => {
-                // Clients should only send requests after handshake.
                 debug!(conn_id = %conn_id, "ws: ignoring non-request frame");
             }
         }
     }
 
     // ── Cleanup ──────────────────────────────────────────────────────────
+
+    // Unregister node if applicable.
+    let removed_node = state.nodes.write().await.unregister_by_conn(&conn_id);
+    if let Some(node) = &removed_node {
+        info!(conn_id = %conn_id, node_id = %node.node_id, "node unregistered");
+        broadcast(
+            &state,
+            "presence",
+            serde_json::json!({
+                "type": "node.disconnected",
+                "nodeId": node.node_id,
+            }),
+            BroadcastOpts::default(),
+        )
+        .await;
+    }
 
     let duration = state
         .remove_client(&conn_id)
@@ -202,8 +353,7 @@ pub async fn handle_connection(
     write_handle.abort();
 }
 
-/// Wait for the first `connect` request frame. Returns the request ID and
-/// parsed ConnectParams.
+/// Wait for the first `connect` request frame.
 async fn wait_for_connect(
     rx: &mut futures::stream::SplitStream<WebSocket>,
 ) -> anyhow::Result<(String, ConnectParams)> {

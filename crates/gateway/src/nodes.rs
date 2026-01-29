@@ -64,6 +64,15 @@ impl NodeRegistry {
             .any(|n| n.platform == "ios" || n.platform == "android")
     }
 
+    pub fn rename(&mut self, node_id: &str, display_name: &str) -> Result<(), String> {
+        let node = self
+            .nodes
+            .get_mut(node_id)
+            .ok_or_else(|| "node not found".to_string())?;
+        node.display_name = Some(display_name.to_string());
+        Ok(())
+    }
+
     pub fn count(&self) -> usize {
         self.nodes.len()
     }

@@ -3,9 +3,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 
 use moltis_protocol::ConnectParams;
+
+use crate::auth::ResolvedAuth;
+use crate::nodes::NodeRegistry;
+use crate::pairing::PairingState;
+use crate::services::GatewayServices;
 
 // ── Connected client ─────────────────────────────────────────────────────────
 
@@ -17,6 +22,7 @@ pub struct ConnectedClient {
     /// Channel for sending serialized frames to this client's write loop.
     pub sender: mpsc::UnboundedSender<String>,
     pub connected_at: Instant,
+    pub last_activity: Instant,
 }
 
 impl ConnectedClient {
@@ -33,20 +39,26 @@ impl ConnectedClient {
     }
 
     pub fn has_scope(&self, scope: &str) -> bool {
-        self.scopes().iter().any(|s| *s == moltis_protocol::scopes::ADMIN || *s == scope)
+        self.scopes()
+            .iter()
+            .any(|s| *s == moltis_protocol::scopes::ADMIN || *s == scope)
     }
 
     /// Send a serialized JSON frame to this client.
     pub fn send(&self, frame: &str) -> bool {
         self.sender.send(frame.to_string()).is_ok()
     }
+
+    /// Touch the activity timestamp.
+    pub fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
 }
 
 // ── Dedupe cache ─────────────────────────────────────────────────────────────
 
-/// Idempotency cache entry.
 struct DedupeEntry {
-    _inserted_at: Instant,
+    inserted_at: Instant,
 }
 
 /// Simple TTL-based idempotency cache.
@@ -77,21 +89,19 @@ impl DedupeCache {
         if self.entries.contains_key(key) {
             return true;
         }
-        if self.entries.len() >= self.max_entries {
-            // Evict oldest entry.
-            if let Some(oldest_key) = self
+        if self.entries.len() >= self.max_entries
+            && let Some(oldest_key) = self
                 .entries
                 .iter()
-                .min_by_key(|(_, v)| v._inserted_at)
+                .min_by_key(|(_, v)| v.inserted_at)
                 .map(|(k, _)| k.clone())
             {
                 self.entries.remove(&oldest_key);
             }
-        }
         self.entries.insert(
             key.to_string(),
             DedupeEntry {
-                _inserted_at: Instant::now(),
+                inserted_at: Instant::now(),
             },
         );
         false
@@ -99,8 +109,17 @@ impl DedupeCache {
 
     fn evict_expired(&mut self) {
         let cutoff = Instant::now() - self.ttl;
-        self.entries.retain(|_, v| v._inserted_at > cutoff);
+        self.entries.retain(|_, v| v.inserted_at > cutoff);
     }
+}
+
+// ── Pending node invoke ─────────────────────────────────────────────────────
+
+/// A pending RPC invocation waiting for a node to respond.
+pub struct PendingInvoke {
+    pub request_id: String,
+    pub sender: oneshot::Sender<serde_json::Value>,
+    pub created_at: Instant,
 }
 
 // ── Gateway state ────────────────────────────────────────────────────────────
@@ -117,10 +136,20 @@ pub struct GatewayState {
     pub version: String,
     /// Hostname for HelloOk.
     pub hostname: String,
+    /// Auth configuration.
+    pub auth: ResolvedAuth,
+    /// Connected device nodes.
+    pub nodes: RwLock<NodeRegistry>,
+    /// Device pairing state.
+    pub pairing: RwLock<PairingState>,
+    /// Pending node invoke requests awaiting results.
+    pub pending_invokes: RwLock<HashMap<String, PendingInvoke>>,
+    /// Domain services.
+    pub services: GatewayServices,
 }
 
 impl GatewayState {
-    pub fn new() -> Arc<Self> {
+    pub fn new(auth: ResolvedAuth, services: GatewayServices) -> Arc<Self> {
         let hostname = hostname::get()
             .ok()
             .and_then(|h| h.into_string().ok())
@@ -132,6 +161,11 @@ impl GatewayState {
             dedupe: RwLock::new(DedupeCache::new()),
             version: env!("CARGO_PKG_VERSION").to_string(),
             hostname,
+            auth,
+            nodes: RwLock::new(NodeRegistry::new()),
+            pairing: RwLock::new(PairingState::new()),
+            pending_invokes: RwLock::new(HashMap::new()),
+            services,
         })
     }
 
@@ -153,5 +187,12 @@ impl GatewayState {
     /// Number of connected clients.
     pub async fn client_count(&self) -> usize {
         self.clients.read().await.len()
+    }
+
+    /// Close a client: remove from registry, abort if needed.
+    pub async fn close_client(&self, conn_id: &str) -> Option<ConnectedClient> {
+        // Also unregister from node registry if it was a node.
+        self.nodes.write().await.unregister_by_conn(conn_id);
+        self.remove_client(conn_id).await
     }
 }
