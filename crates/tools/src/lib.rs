@@ -7,6 +7,7 @@
 //! per-group, per-sender, sandbox).
 
 pub mod approval;
+pub mod cron_tool;
 pub mod exec;
 pub mod policy;
 pub mod sandbox;

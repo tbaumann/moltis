@@ -576,6 +576,11 @@ impl GatewayServices {
         self
     }
 
+    pub fn with_cron(mut self, cron: Arc<dyn CronService>) -> Self {
+        self.cron = cron;
+        self
+    }
+
     pub fn with_provider_setup(mut self, ps: Arc<dyn ProviderSetupService>) -> Self {
         self.provider_setup = ps;
         self

@@ -1,27 +1,16 @@
-use serde::{Deserialize, Serialize};
+//! Persistence trait and implementations for cron jobs.
 
-/// Persistent cron job storage.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CronJob {
-    pub id: String,
-    pub expression: String,
-    pub agent_id: String,
-    pub message: String,
-    pub deliver_to: Option<DeliverTarget>,
-    pub enabled: bool,
-}
+use {anyhow::Result, async_trait::async_trait};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DeliverTarget {
-    pub channel: String,
-    pub account_id: String,
-    pub peer_id: String,
-}
+use crate::types::{CronJob, CronRunRecord};
 
-pub fn load_jobs(_path: &std::path::Path) -> anyhow::Result<Vec<CronJob>> {
-    todo!("read cron-jobs.json")
-}
-
-pub fn save_jobs(_path: &std::path::Path, _jobs: &[CronJob]) -> anyhow::Result<()> {
-    todo!("write cron-jobs.json")
+/// Persistence backend for cron jobs and run history.
+#[async_trait]
+pub trait CronStore: Send + Sync {
+    async fn load_jobs(&self) -> Result<Vec<CronJob>>;
+    async fn save_job(&self, job: &CronJob) -> Result<()>;
+    async fn delete_job(&self, id: &str) -> Result<()>;
+    async fn update_job(&self, job: &CronJob) -> Result<()>;
+    async fn append_run(&self, job_id: &str, run: &CronRunRecord) -> Result<()>;
+    async fn get_runs(&self, job_id: &str, limit: usize) -> Result<Vec<CronRunRecord>>;
 }
