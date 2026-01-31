@@ -3373,6 +3373,127 @@
     logsEventHandler = null;
   });
 
+  // ── Skills page ─────────────────────────────────────────────
+
+  registerPage("/skills", function initSkills(container) {
+    container.style.cssText = "flex-direction:column;padding:0;overflow:hidden;";
+
+    var wrapper = document.createElement("div");
+    wrapper.style.cssText = "flex:1;display:flex;flex-direction:column;min-width:0;padding:16px;gap:16px;overflow-y:auto;";
+
+    var header = document.createElement("div");
+    header.style.cssText = "display:flex;align-items:center;gap:12px;";
+    var title = document.createElement("h2");
+    title.className = "text-lg font-medium text-[var(--text-strong)]";
+    title.textContent = "Skills";
+    var refreshBtn = document.createElement("button");
+    refreshBtn.textContent = "Refresh";
+    refreshBtn.style.cssText = "background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius-sm);font-size:.78rem;padding:4px 10px;cursor:pointer;";
+    header.appendChild(title);
+    header.appendChild(refreshBtn);
+    wrapper.appendChild(header);
+
+    var desc = document.createElement("p");
+    desc.className = "text-sm text-[var(--muted)]";
+    desc.textContent = "SKILL.md-based skills discovered from project, personal, and installed paths.";
+    wrapper.appendChild(desc);
+
+    var tableWrap = document.createElement("div");
+    tableWrap.style.cssText = "border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;";
+    wrapper.appendChild(tableWrap);
+
+    container.appendChild(wrapper);
+
+    function renderSkills(skills) {
+      tableWrap.textContent = "";
+      if (!skills || skills.length === 0) {
+        var empty = document.createElement("div");
+        empty.style.cssText = "padding:24px;text-align:center;color:var(--muted);font-size:.85rem;";
+        empty.textContent = "No skills found. Add skills to .moltis/skills/ or install with: moltis skills add owner/repo";
+        tableWrap.appendChild(empty);
+        return;
+      }
+      var table = document.createElement("table");
+      table.style.cssText = "width:100%;border-collapse:collapse;font-size:.82rem;";
+      var thead = document.createElement("thead");
+      var headRow = document.createElement("tr");
+      headRow.style.cssText = "border-bottom:1px solid var(--border);background:var(--surface);";
+      ["Name", "Description", "Source", "License", "Path"].forEach(function (h) {
+        var th = document.createElement("th");
+        th.style.cssText = "text-align:left;padding:8px 12px;font-weight:500;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.04em;";
+        th.textContent = h;
+        headRow.appendChild(th);
+      });
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+
+      var tbody = document.createElement("tbody");
+      skills.forEach(function (s) {
+        var row = document.createElement("tr");
+        row.style.cssText = "border-bottom:1px solid var(--border);";
+        row.onmouseenter = function () { row.style.background = "var(--bg-hover)"; };
+        row.onmouseleave = function () { row.style.background = ""; };
+
+        var nameCell = document.createElement("td");
+        nameCell.style.cssText = "padding:8px 12px;font-weight:500;color:var(--text-strong);font-family:var(--font-mono);";
+        nameCell.textContent = s.name;
+        row.appendChild(nameCell);
+
+        var descCell = document.createElement("td");
+        descCell.style.cssText = "padding:8px 12px;color:var(--text);";
+        descCell.textContent = s.description || "—";
+        row.appendChild(descCell);
+
+        var sourceCell = document.createElement("td");
+        sourceCell.style.cssText = "padding:8px 12px;";
+        var badge = document.createElement("span");
+        var src = (s.source || "unknown").toLowerCase();
+        badge.textContent = src;
+        badge.style.cssText = "display:inline-block;padding:2px 8px;border-radius:9999px;font-size:.72rem;font-weight:500;background:var(--accent-subtle);color:var(--accent);";
+        sourceCell.appendChild(badge);
+        row.appendChild(sourceCell);
+
+        var licCell = document.createElement("td");
+        licCell.style.cssText = "padding:8px 12px;color:var(--muted);font-size:.78rem;";
+        licCell.textContent = s.license || "—";
+        row.appendChild(licCell);
+
+        var pathCell = document.createElement("td");
+        pathCell.style.cssText = "padding:8px 12px;color:var(--muted);font-size:.75rem;font-family:var(--font-mono);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        pathCell.title = s.path || "";
+        pathCell.textContent = s.path || "";
+        row.appendChild(pathCell);
+
+        tbody.appendChild(row);
+      });
+      table.appendChild(tbody);
+      tableWrap.appendChild(table);
+    }
+
+    function fetchSkills() {
+      tableWrap.textContent = "";
+      var loading = document.createElement("div");
+      loading.style.cssText = "padding:24px;text-align:center;color:var(--muted);font-size:.85rem;";
+      loading.textContent = "Loading skills…";
+      tableWrap.appendChild(loading);
+
+      if (!connected) {
+        loading.textContent = "Not connected to gateway.";
+        return;
+      }
+      sendRpc("skills.list", {}).then(function (res) {
+        if (res && res.ok) {
+          renderSkills(res.payload || []);
+        } else {
+          loading.textContent = "Failed to load skills.";
+        }
+      });
+    }
+
+    refreshBtn.addEventListener("click", fetchSkills);
+    fetchSkills();
+  });
+
   // ── WebSocket ─────────────────────────────────────────────
   function connect() {
     setStatus("connecting", "connecting...");

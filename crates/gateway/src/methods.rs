@@ -47,6 +47,7 @@ const READ_METHODS: &[&str] = &[
     "models.list",
     "agents.list",
     "agent.identity.get",
+    "skills.list",
     "skills.status",
     "voicewake.get",
     "sessions.list",
@@ -1672,6 +1673,19 @@ impl MethodRegistry {
         );
 
         // Skills
+        self.register(
+            "skills.list",
+            Box::new(|ctx| {
+                Box::pin(async move {
+                    ctx.state
+                        .services
+                        .skills
+                        .list()
+                        .await
+                        .map_err(|e| ErrorShape::new(error_codes::UNAVAILABLE, e))
+                })
+            }),
+        );
         self.register(
             "skills.status",
             Box::new(|ctx| {

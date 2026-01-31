@@ -704,9 +704,7 @@ impl ChatService for LiveChatService {
         // Context window from current provider
         let context_window = {
             let reg = self.providers.read().await;
-            reg.first()
-                .map(|p| p.context_window())
-                .unwrap_or(200_000)
+            reg.first().map(|p| p.context_window()).unwrap_or(200_000)
         };
 
         // Sandbox info

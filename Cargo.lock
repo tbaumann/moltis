@@ -1942,6 +1942,7 @@ dependencies = [
  "moltis-protocol",
  "moltis-routing",
  "moltis-sessions",
+ "moltis-skills",
  "moltis-tools",
  "reqwest 0.12.28",
  "serde",

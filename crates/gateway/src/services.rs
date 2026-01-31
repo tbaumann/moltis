@@ -293,6 +293,7 @@ pub trait SkillsService: Send + Sync {
     async fn bins(&self) -> ServiceResult;
     async fn install(&self, params: Value) -> ServiceResult;
     async fn update(&self, params: Value) -> ServiceResult;
+    async fn list(&self) -> ServiceResult;
 }
 
 pub struct NoopSkillsService;
@@ -313,6 +314,28 @@ impl SkillsService for NoopSkillsService {
 
     async fn update(&self, _p: Value) -> ServiceResult {
         Err("skills not available".into())
+    }
+
+    async fn list(&self) -> ServiceResult {
+        use moltis_skills::discover::{FsSkillDiscoverer, SkillDiscoverer};
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let search_paths = FsSkillDiscoverer::default_paths(&cwd);
+        let discoverer = FsSkillDiscoverer::new(search_paths);
+        let skills = discoverer.discover().await.map_err(|e| e.to_string())?;
+        let items: Vec<_> = skills
+            .iter()
+            .map(|s| {
+                serde_json::json!({
+                    "name": s.name,
+                    "description": s.description,
+                    "license": s.license,
+                    "allowed_tools": s.allowed_tools,
+                    "path": s.path.to_string_lossy(),
+                    "source": s.source,
+                })
+            })
+            .collect();
+        Ok(serde_json::json!(items))
     }
 }
 

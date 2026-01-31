@@ -23,6 +23,7 @@ moltis-projects       = { workspace = true }
 moltis-protocol       = { workspace = true }
 moltis-routing        = { workspace = true }
 moltis-sessions       = { workspace = true }
+moltis-skills         = { workspace = true }
 moltis-tools          = { workspace = true }
 reqwest               = { workspace = true }
 serde                 = { workspace = true }
