@@ -73,6 +73,14 @@ function createSessionMeta(s) {
 		metaText += ` \u00b7 \u2387 ${s.worktree_branch}`;
 	}
 	meta.textContent = metaText;
+	if (s.updatedAt) {
+		var sep = document.createTextNode(" \u00b7 ");
+		var t = document.createElement("time");
+		t.setAttribute("data-epoch-ms", String(s.updatedAt));
+		t.textContent = new Date(s.updatedAt).toISOString();
+		meta.appendChild(sep);
+		meta.appendChild(t);
+	}
 	return meta;
 }
 
@@ -260,6 +268,33 @@ function renderHistoryAssistantMessage(msg) {
 	return el;
 }
 
+export function appendLastMessageTimestamp(epochMs) {
+	if (!S.chatMsgBox) return;
+	// Remove any previous last-message timestamp
+	var old = S.chatMsgBox.querySelector(".msg-footer-time");
+	if (old) old.remove();
+	var lastMsg = S.chatMsgBox.lastElementChild;
+	if (!lastMsg) return;
+	var footer = lastMsg.querySelector(".msg-model-footer");
+	if (!footer) {
+		footer = document.createElement("div");
+		footer.className = "msg-model-footer";
+		lastMsg.appendChild(footer);
+	}
+	var sep = document.createTextNode(" \u00b7 ");
+	sep.className = "msg-footer-time";
+	var t = document.createElement("time");
+	t.className = "msg-footer-time";
+	t.setAttribute("data-epoch-ms", String(epochMs));
+	t.textContent = new Date(epochMs).toISOString();
+	// Wrap separator + time in a span so we can remove both easily
+	var wrap = document.createElement("span");
+	wrap.className = "msg-footer-time";
+	wrap.appendChild(document.createTextNode(" \u00b7 "));
+	wrap.appendChild(t);
+	footer.appendChild(wrap);
+}
+
 function makeThinkingDots() {
 	var tpl = document.getElementById("tpl-thinking-dots");
 	return tpl.content.cloneNode(true).firstElementChild;
@@ -337,6 +372,11 @@ export function switchSession(key, searchContext, projectId) {
 			});
 			S.setChatBatchLoading(false);
 			S.setLastHistoryIndex(history.length > 0 ? history.length - 1 : -1);
+			if (history.length > 0) {
+				var lastMsg = history[history.length - 1];
+				var ts = lastMsg.created_at;
+				if (ts) appendLastMessageTimestamp(ts);
+			}
 			S.setSessionSwitchInProgress(false);
 			postHistoryLoadActions(key, searchContext, msgEls, sessionList);
 		} else {

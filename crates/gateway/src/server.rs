@@ -36,6 +36,7 @@ use {
 use crate::{
     approval::{GatewayApprovalBroadcaster, LiveExecApprovalService},
     auth,
+    auth_routes::{AuthState, auth_router},
     broadcast::broadcast_tick,
     chat::{LiveChatService, LiveModelService},
     methods::MethodRegistry,
@@ -52,57 +53,79 @@ use crate::tls::CertManager;
 // ── Shared app state ─────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-struct AppState {
-    gateway: Arc<GatewayState>,
-    methods: Arc<MethodRegistry>,
+pub struct AppState {
+    pub gateway: Arc<GatewayState>,
+    pub methods: Arc<MethodRegistry>,
 }
 
 // ── Server startup ───────────────────────────────────────────────────────────
 
 /// Build the gateway router (shared between production startup and tests).
 pub fn build_gateway_app(state: Arc<GatewayState>, methods: Arc<MethodRegistry>) -> Router {
-    let app_state = AppState {
-        gateway: state,
-        methods,
-    };
-
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/health", get(health_handler))
         .route("/ws", get(ws_upgrade_handler));
 
+    // Nest auth routes if credential store is available.
+    if let Some(ref cred_store) = state.credential_store {
+        let auth_state = AuthState {
+            credential_store: Arc::clone(cred_store),
+            webauthn_state: state.webauthn_state.clone(),
+            gateway_state: Arc::clone(&state),
+        };
+        router = router.nest("/api/auth", auth_router().with_state(auth_state));
+    }
+
+    let app_state = AppState {
+        gateway: state,
+        methods,
+    };
+
     #[cfg(feature = "web-ui")]
-    let router = router
-        .route("/assets/v/{version}/{*path}", get(versioned_asset_handler))
-        .route("/assets/{*path}", get(asset_handler))
-        .route("/api/bootstrap", get(api_bootstrap_handler))
-        .route("/api/skills", get(api_skills_handler))
-        .route("/api/skills/search", get(api_skills_search_handler))
-        .route(
-            "/api/images/cached",
-            get(api_cached_images_handler).delete(api_prune_cached_images_handler),
-        )
-        .route(
-            "/api/images/cached/{tag}",
-            axum::routing::delete(api_delete_cached_image_handler),
-        )
-        .route(
-            "/api/images/build",
-            axum::routing::post(api_build_image_handler),
-        )
-        .route(
-            "/api/images/check-packages",
-            axum::routing::post(api_check_packages_handler),
-        )
-        .route(
-            "/api/images/default",
-            get(api_get_default_image_handler).put(api_set_default_image_handler),
-        )
-        .fallback(spa_fallback);
+    let router = {
+        // Protected API routes — require auth when credential store is configured.
+        let protected = Router::new()
+            .route("/api/bootstrap", get(api_bootstrap_handler))
+            .route("/api/gon", get(api_gon_handler))
+            .route("/api/skills", get(api_skills_handler))
+            .route("/api/skills/search", get(api_skills_search_handler))
+            .route(
+                "/api/images/cached",
+                get(api_cached_images_handler).delete(api_prune_cached_images_handler),
+            )
+            .route(
+                "/api/images/cached/{tag}",
+                axum::routing::delete(api_delete_cached_image_handler),
+            )
+            .route(
+                "/api/images/build",
+                axum::routing::post(api_build_image_handler),
+            )
+            .route(
+                "/api/images/check-packages",
+                axum::routing::post(api_check_packages_handler),
+            )
+            .route(
+                "/api/images/default",
+                get(api_get_default_image_handler).put(api_set_default_image_handler),
+            )
+            .layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                crate::auth_middleware::require_auth,
+            ));
+
+        // Public routes (assets, SPA fallback).
+        router
+            .route("/assets/v/{version}/{*path}", get(versioned_asset_handler))
+            .route("/assets/{*path}", get(asset_handler))
+            .merge(protected)
+            .fallback(spa_fallback)
+    };
 
     router.layer(cors).with_state(app_state)
 }
@@ -112,11 +135,18 @@ pub async fn start_gateway(
     bind: &str,
     port: u16,
     log_buffer: Option<crate::logs::LogBuffer>,
+    config_dir: Option<std::path::PathBuf>,
+    data_dir: Option<std::path::PathBuf>,
 ) -> anyhow::Result<()> {
+    // Apply config directory override before loading config.
+    if let Some(dir) = config_dir {
+        moltis_config::set_config_dir(dir);
+    }
+
     // Resolve auth from environment (MOLTIS_TOKEN / MOLTIS_PASSWORD).
     let token = std::env::var("MOLTIS_TOKEN").ok();
     let password = std::env::var("MOLTIS_PASSWORD").ok();
-    let resolved_auth = auth::resolve_auth(token, password);
+    let resolved_auth = auth::resolve_auth(token, password.clone());
 
     // Load config file (moltis.toml / .yaml / .json) if present.
     let config = moltis_config::discover_and_load();
@@ -161,9 +191,7 @@ pub async fn start_gateway(
     }
 
     // Initialize data directory and SQLite database.
-    let data_dir = directories::ProjectDirs::from("", "", "moltis")
-        .map(|d| d.data_dir().to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from(".moltis"));
+    let data_dir = data_dir.unwrap_or_else(moltis_config::data_dir);
     std::fs::create_dir_all(&data_dir).ok();
 
     // Enable log persistence so entries survive restarts.
@@ -184,6 +212,47 @@ pub async fn start_gateway(
         .await
         .expect("failed to init sessions table");
 
+    // Initialize credential store (auth tables).
+    let credential_store = Arc::new(
+        auth::CredentialStore::new(db_pool.clone())
+            .await
+            .expect("failed to init credential store"),
+    );
+
+    // Initialize WebAuthn state for passkey support.
+    // RP ID defaults to "localhost"; override with MOLTIS_WEBAUTHN_RP_ID.
+    let rp_id = std::env::var("MOLTIS_WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".into());
+    let default_scheme = if config.tls.enabled {
+        "https"
+    } else {
+        "http"
+    };
+    let rp_origin_str = std::env::var("MOLTIS_WEBAUTHN_ORIGIN")
+        .unwrap_or_else(|_| format!("{default_scheme}://{rp_id}:{port}"));
+    let webauthn_state = match webauthn_rs::prelude::Url::parse(&rp_origin_str) {
+        Ok(rp_origin) => match crate::auth_webauthn::WebAuthnState::new(&rp_id, &rp_origin) {
+            Ok(wa) => Some(Arc::new(wa)),
+            Err(e) => {
+                tracing::warn!("failed to init WebAuthn: {e}");
+                None
+            },
+        },
+        Err(e) => {
+            tracing::warn!("invalid WebAuthn origin URL '{rp_origin_str}': {e}");
+            None
+        },
+    };
+
+    // If MOLTIS_PASSWORD is set and no password in DB yet, migrate it.
+    if let Some(ref pw) = password
+        && !credential_store.is_setup_complete()
+    {
+        info!("migrating MOLTIS_PASSWORD env var to credential store");
+        if let Err(e) = credential_store.set_initial_password(pw).await {
+            tracing::warn!("failed to migrate env password: {e}");
+        }
+    }
+
     crate::message_log_store::SqliteMessageLog::init(&db_pool)
         .await
         .expect("failed to init message_log table");
@@ -192,9 +261,8 @@ pub async fn start_gateway(
     );
 
     // Migrate from projects.toml if it exists.
-    let config_dir = directories::ProjectDirs::from("", "", "moltis")
-        .map(|d| d.config_dir().to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from(".moltis"));
+    let config_dir =
+        moltis_config::config_dir().unwrap_or_else(|| std::path::PathBuf::from(".moltis"));
     let projects_toml_path = config_dir.join("projects.toml");
     if projects_toml_path.exists() {
         info!("migrating projects.toml to SQLite");
@@ -775,14 +843,29 @@ pub async fn start_gateway(
         }
     };
 
-    let state = GatewayState::full(
+    let is_localhost = matches!(bind, "127.0.0.1" | "::1" | "localhost");
+    let state = GatewayState::with_options(
         resolved_auth,
         services,
         Arc::clone(&approval_manager),
         Some(Arc::clone(&sandbox_router)),
+        Some(Arc::clone(&credential_store)),
+        webauthn_state,
+        is_localhost,
         hook_registry.clone(),
         memory_manager.clone(),
     );
+
+    // Generate a one-time setup code if setup is pending and auth is not disabled.
+    let setup_code_display =
+        if !credential_store.is_setup_complete() && !credential_store.is_auth_disabled() {
+            let code = crate::auth_routes::generate_setup_code();
+            *state.setup_code.write().await = Some(code.clone());
+            Some(code)
+        } else {
+            None
+        };
+
     // Populate the deferred reference so cron callbacks can reach the gateway.
     let _ = deferred_state.set(Arc::clone(&state));
 
@@ -938,6 +1021,11 @@ pub async fn start_gateway(
             }
         ),
         format!("sandbox: {} backend", sandbox_router.backend_name()),
+        format!(
+            "config: {}",
+            moltis_config::find_or_default_config_path().display()
+        ),
+        format!("data: {}", data_dir.display()),
     ];
     // Hint about Apple Container on macOS when using Docker.
     #[cfg(target_os = "macos")]
@@ -949,6 +1037,12 @@ pub async fn start_gateway(
     // Warn when no sandbox backend is available.
     if sandbox_router.backend_name() == "none" {
         lines.push("⚠ no container runtime found; commands run on host".into());
+    }
+    // Display setup code if one was generated.
+    if let Some(ref code) = setup_code_display {
+        lines.push(format!(
+            "setup code: {code} (enter this in the browser to set your password)"
+        ));
     }
     #[cfg(feature = "tls")]
     if tls_active {
@@ -1086,8 +1180,38 @@ async fn ws_upgrade_handler(
 /// Injects a `<script>` tag with pre-fetched bootstrap data (channels,
 /// sessions, models, projects) so the UI can render synchronously without
 /// waiting for the WebSocket handshake — similar to the gon pattern in Rails.
+/// Server-side data injected into every page as `window.__MOLTIS__`
+/// (gon pattern — see CLAUDE.md § Server-Injected Data).
+///
+/// Add new fields here when the frontend needs data at page load
+/// without an async fetch. Fields must not depend on the request
+/// (no cookies, no session — use `/api/auth/status` for that).
 #[cfg(feature = "web-ui")]
-async fn spa_fallback(uri: axum::http::Uri) -> impl IntoResponse {
+#[derive(serde::Serialize)]
+struct GonData {
+    identity: moltis_config::ResolvedIdentity,
+}
+
+#[cfg(feature = "web-ui")]
+async fn build_gon_data(gw: &GatewayState) -> GonData {
+    let identity = gw
+        .services
+        .onboarding
+        .identity_get()
+        .await
+        .ok()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    GonData { identity }
+}
+
+#[cfg(feature = "web-ui")]
+async fn api_gon_handler(State(state): State<AppState>) -> impl IntoResponse {
+    Json(build_gon_data(&state.gateway).await)
+}
+
+#[cfg(feature = "web-ui")]
+async fn spa_fallback(State(state): State<AppState>, uri: axum::http::Uri) -> impl IntoResponse {
     let path = uri.path();
     if path.starts_with("/assets/") || path.contains('.') {
         return (StatusCode::NOT_FOUND, "not found").into_response();
@@ -1096,6 +1220,13 @@ async fn spa_fallback(uri: axum::http::Uri) -> impl IntoResponse {
     let raw = read_asset("index.html")
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
+
+    // Build server-side data blob (gon pattern) injected into <head>.
+    let gon = build_gon_data(&state.gateway).await;
+    let gon_script = format!(
+        "<script>window.__MOLTIS__={};</script>",
+        serde_json::to_string(&gon).unwrap_or_else(|_| "{}".into()),
+    );
 
     let body = if is_dev_assets() {
         // Dev: no versioned URLs, just serve directly with no-cache
@@ -1107,6 +1238,9 @@ async fn spa_fallback(uri: axum::http::Uri) -> impl IntoResponse {
         raw.replace("__BUILD_TS__", &HASH)
             .replace("/assets/", &versioned)
     };
+
+    // Inject gon data into <head> so it's available before any module scripts run.
+    let body = body.replace("</head>", &format!("{gon_script}\n</head>"));
 
     ([("cache-control", "no-cache, no-store")], Html(body)).into_response()
 }

@@ -27,6 +27,12 @@ multiple LLM providers and communication channels, inspired by
 - **OAuth flows** — built-in OAuth2 for provider authentication
 - **TLS support** — automatic self-signed certificate generation
 - **Observability** — OpenTelemetry tracing with OTLP export
+- **Authentication** — password and passkey (WebAuthn) authentication with
+  session cookies, API key support, and a first-run setup code flow
+- **Onboarding wizard** — guided setup for agent identity (name, emoji,
+  creature, vibe, soul) and user profile
+- **Configurable directories** — `--config-dir` / `--data-dir` CLI flags and
+  `MOLTIS_CONFIG_DIR` / `MOLTIS_DATA_DIR` environment variables
 
 ## Getting Started
 
@@ -41,6 +47,15 @@ cargo build --release    # Optimized build
 
 ```bash
 cargo run -- gateway     # Start the gateway server
+```
+
+On first run, a setup code is printed to the terminal. Open the web UI and
+enter this code to set your password or register a passkey.
+
+Optional flags:
+
+```bash
+cargo run -- gateway --config-dir /path/to/config --data-dir /path/to/data
 ```
 
 ### Test
@@ -155,6 +170,7 @@ Moltis is organized as a Cargo workspace with the following crates:
 | `moltis-tools` | Tool/function execution |
 | `moltis-routing` | Message routing |
 | `moltis-projects` | Project/workspace management |
+| `moltis-onboarding` | Onboarding wizard and identity management |
 | `moltis-oauth` | OAuth2 flows |
 | `moltis-protocol` | Serializable protocol definitions |
 | `moltis-common` | Shared utilities |

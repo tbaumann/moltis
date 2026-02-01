@@ -158,12 +158,12 @@ function SendersTab() {
       <tbody>
         ${senders.value.map((s) => {
 					var identifier = s.username || s.peer_id;
-					var lastSeen = s.last_seen ? new Date(s.last_seen * 1000).toLocaleString() : "\u2014";
+					var lastSeenMs = s.last_seen ? s.last_seen * 1000 : 0;
 					return html`<tr key=${s.peer_id}>
             <td class="senders-td">${s.sender_name || s.peer_id}</td>
             <td class="senders-td" style="color:var(--muted);">${s.username ? `@${s.username}` : "\u2014"}</td>
             <td class="senders-td">${s.message_count}</td>
-            <td class="senders-td" style="color:var(--muted);font-size:12px;">${lastSeen}</td>
+            <td class="senders-td" style="color:var(--muted);font-size:12px;">${lastSeenMs ? html`<time data-epoch-ms="${lastSeenMs}">${new Date(lastSeenMs).toISOString()}</time>` : "\u2014"}</td>
             <td class="senders-td">
               <span class="provider-item-badge ${s.allowed ? "configured" : "oauth"}">${s.allowed ? "Allowed" : "Denied"}</span>
             </td>

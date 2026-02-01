@@ -16,7 +16,10 @@ use moltis_tools::{approval::ApprovalManager, sandbox::SandboxRouter};
 use moltis_channels::ChannelReplyTarget;
 
 use crate::{
-    auth::ResolvedAuth, nodes::NodeRegistry, pairing::PairingState, services::GatewayServices,
+    auth::{CredentialStore, ResolvedAuth},
+    nodes::NodeRegistry,
+    pairing::PairingState,
+    services::GatewayServices,
 };
 
 // ── Connected client ─────────────────────────────────────────────────────────
@@ -158,6 +161,10 @@ pub struct GatewayState {
     pub active_sessions: RwLock<HashMap<String, String>>,
     /// Active project id per connection (conn_id → project id).
     pub active_projects: RwLock<HashMap<String, String>>,
+    /// Credential store for authentication (password, passkeys, API keys).
+    pub credential_store: Option<Arc<CredentialStore>>,
+    /// WebAuthn state for passkey registration/authentication.
+    pub webauthn_state: Option<Arc<crate::auth_webauthn::WebAuthnState>>,
     /// Per-session sandbox router (None if sandbox is not configured).
     pub sandbox_router: Option<Arc<SandboxRouter>>,
     /// Pending channel reply targets: when a channel message triggers a chat
@@ -168,6 +175,11 @@ pub struct GatewayState {
     pub hook_registry: Option<Arc<moltis_common::hooks::HookRegistry>>,
     /// Memory manager for long-term memory search (None if no embedding provider).
     pub memory_manager: Option<Arc<moltis_memory::manager::MemoryManager>>,
+    /// One-time setup code displayed at startup, required during initial setup.
+    /// Cleared after successful setup.
+    pub setup_code: RwLock<Option<String>>,
+    /// Whether the server is bound to a loopback address (localhost/127.0.0.1/::1).
+    pub localhost_only: bool,
 }
 
 impl GatewayState {
@@ -176,7 +188,17 @@ impl GatewayState {
         services: GatewayServices,
         approval_manager: Arc<ApprovalManager>,
     ) -> Arc<Self> {
-        Self::with_sandbox_router(auth, services, approval_manager, None)
+        Self::with_options(
+            auth,
+            services,
+            approval_manager,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
     }
 
     pub fn with_sandbox_router(
@@ -185,14 +207,28 @@ impl GatewayState {
         approval_manager: Arc<ApprovalManager>,
         sandbox_router: Option<Arc<SandboxRouter>>,
     ) -> Arc<Self> {
-        Self::full(auth, services, approval_manager, sandbox_router, None, None)
+        Self::with_options(
+            auth,
+            services,
+            approval_manager,
+            sandbox_router,
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
     }
 
-    pub fn full(
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_options(
         auth: ResolvedAuth,
         services: GatewayServices,
         approval_manager: Arc<ApprovalManager>,
         sandbox_router: Option<Arc<SandboxRouter>>,
+        credential_store: Option<Arc<CredentialStore>>,
+        webauthn_state: Option<Arc<crate::auth_webauthn::WebAuthnState>>,
+        localhost_only: bool,
         hook_registry: Option<Arc<moltis_common::hooks::HookRegistry>>,
         memory_manager: Option<Arc<moltis_memory::manager::MemoryManager>>,
     ) -> Arc<Self> {
@@ -213,6 +249,8 @@ impl GatewayState {
             pending_invokes: RwLock::new(HashMap::new()),
             services,
             approval_manager,
+            credential_store,
+            webauthn_state,
             chat_override: RwLock::new(None),
             active_sessions: RwLock::new(HashMap::new()),
             active_projects: RwLock::new(HashMap::new()),
@@ -220,6 +258,8 @@ impl GatewayState {
             channel_reply_queue: RwLock::new(HashMap::new()),
             hook_registry,
             memory_manager,
+            setup_code: RwLock::new(None),
+            localhost_only,
         })
     }
 

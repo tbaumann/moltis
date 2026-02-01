@@ -45,6 +45,81 @@ serves them in two modes:
 When editing JavaScript files, run `biome check --write` to lint and format
 them. No separate asset build step is required.
 
+**HTML in JS**: Avoid creating HTML elements from JavaScript. Instead, add
+hidden elements in `index.html` (with `style="display:none"`) and have JS
+toggle their visibility. This keeps markup in HTML where it belongs and makes
+the structure easier to inspect. Preact components (HTM templates) are the
+exception — they use `html` tagged templates by design.
+
+### Server-Injected Data (gon pattern)
+
+When the frontend needs server-side data **at page load** (before any async
+fetch completes), use the gon pattern instead of inline `<script>` DOM
+manipulation or extra API calls:
+
+**Rust side** — add a field to `GonData` in `server.rs` and populate it in
+`build_gon_data()`. The struct is serialized and injected into `<head>` as
+`<script>window.__MOLTIS__={...};</script>` on every page serve. Only put
+request-independent data here (no cookies, no sessions — those still need
+`/api/auth/status`).
+
+```rust
+// server.rs
+#[derive(serde::Serialize)]
+struct GonData {
+    identity: moltis_config::ResolvedIdentity,
+    // add new fields here
+}
+```
+
+**JS side** — import `gon.js`:
+
+```js
+import * as gon from "./gon.js";
+
+// Read server-injected data synchronously at module load.
+var identity = gon.get("identity");
+
+// React to changes (from set() or refresh()).
+gon.onChange("identity", (id) => { /* update DOM */ });
+
+// After a mutation (e.g. saving identity), refresh all gon data
+// from the server. This re-fetches /api/gon and notifies all
+// onChange listeners — no need to update specific fields manually.
+gon.refresh();
+```
+
+**Do NOT**: inject inline `<script>` tags with `document.getElementById`
+calls, build HTML strings in Rust, or use `body.replace` for DOM side effects.
+All of those are fragile. The gon blob is the single injection point.
+When data changes at runtime, call `gon.refresh()` instead of manually
+updating individual fields — it keeps everything consistent.
+
+## Authentication Architecture
+
+The gateway supports password and passkey (WebAuthn) authentication, managed
+in `crates/gateway/src/auth.rs` with routes in `auth_routes.rs` and middleware
+in `auth_middleware.rs`.
+
+Key concepts:
+
+- **Setup code**: On first run (no password set), a random code is printed to
+  the terminal. The user enters it on the `/setup` page to set a password or
+  register a passkey. The code is single-use and cleared after setup.
+- **Auth states**: `auth_disabled` (explicit `[auth] disabled = true` in
+  config) and localhost-no-password (safe default) are distinct states.
+  `auth_disabled` is a deliberate user choice; localhost-no-password is the
+  initial state before setup.
+- **Session cookies**: HTTP-only `moltis_session` cookie, validated by the
+  auth middleware.
+- **API keys**: Bearer token auth via `Authorization: Bearer <key>` header,
+  managed through the settings UI.
+- **Credential store**: `CredentialStore` in `auth.rs` persists passwords
+  (argon2 hashed), passkeys, API keys, and session tokens to a JSON file.
+
+The auth middleware (`RequireAuth`) protects all `/api/*` routes except
+`/api/auth/*` and `/api/gon`.
+
 ## Testing
 
 ```bash
@@ -66,6 +141,14 @@ biome check --write      # Lint & format JavaScript files (installed via mise)
 
 When editing `Cargo.toml` or other TOML files, run `taplo fmt` to format them
 according to the project's `taplo.toml` configuration.
+
+## CLI Auth Commands
+
+The `auth` subcommand (`crates/cli/src/auth_commands.rs`) provides:
+
+- `moltis auth reset-password` — clear the stored password
+- `moltis auth reset-identity` — clear identity and user profile (triggers
+  onboarding on next load)
 
 ## Provider Implementation Guidelines
 

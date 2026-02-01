@@ -22,6 +22,10 @@ pub enum AuthAction {
         #[arg(long)]
         provider: String,
     },
+    /// Reset gateway authentication (remove password, sessions, passkeys, API keys).
+    ResetPassword,
+    /// Reset agent identity and user profile (triggers onboarding on next start).
+    ResetIdentity,
 }
 
 pub async fn handle_auth(action: AuthAction) -> Result<()> {
@@ -29,6 +33,8 @@ pub async fn handle_auth(action: AuthAction) -> Result<()> {
         AuthAction::Login { provider } => login(&provider).await,
         AuthAction::Status => status(),
         AuthAction::Logout { provider } => logout(&provider),
+        AuthAction::ResetPassword => reset_password().await,
+        AuthAction::ResetIdentity => reset_identity(),
     }
 }
 
@@ -141,5 +147,28 @@ fn logout(provider: &str) -> Result<()> {
     let store = TokenStore::new();
     store.delete(provider)?;
     println!("Logged out from {provider}");
+    Ok(())
+}
+
+fn reset_identity() -> Result<()> {
+    moltis_config::loader::update_config(|cfg| {
+        cfg.identity = Default::default();
+        cfg.user = Default::default();
+    })?;
+    println!("Identity and user profile cleared. Onboarding will be required on next load.");
+    Ok(())
+}
+
+async fn reset_password() -> Result<()> {
+    let data_dir = moltis_config::data_dir();
+    let db_path = data_dir.join("moltis.db");
+    if !db_path.exists() {
+        println!("No database found at {}", db_path.display());
+        return Ok(());
+    }
+
+    moltis_gateway::auth::CredentialStore::reset_from_db_path(&db_path).await?;
+    println!("Authentication reset. Password, sessions, passkeys, and API keys removed.");
+    println!("The gateway will require a new setup on next start.");
     Ok(())
 }

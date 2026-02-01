@@ -101,7 +101,7 @@ function CronJobRow(props) {
         <span class="cron-slider" />
       </label>
     </td>
-    <td class="cron-mono">${job.state?.nextRunAtMs ? new Date(job.state.nextRunAtMs).toLocaleString() : "\u2014"}</td>
+    <td class="cron-mono">${job.state?.nextRunAtMs ? html`<time data-epoch-ms="${job.state.nextRunAtMs}">${new Date(job.state.nextRunAtMs).toISOString()}</time>` : "\u2014"}</td>
     <td>${job.state?.lastStatus ? html`<span class="cron-badge ${job.state.lastStatus}">${job.state.lastStatus}</span>` : "\u2014"}</td>
     <td class="cron-actions">
       <button class="cron-action-btn" onClick=${() => {
@@ -149,7 +149,7 @@ function RunHistoryPanel() {
     ${h.runs !== null && h.runs.length === 0 && html`<div class="text-xs text-[var(--muted)]">No runs yet.</div>`}
     ${h.runs?.map(
 			(run) => html`<div class="cron-run-item" key=${run.startedAtMs}>
-        <span class="text-xs text-[var(--muted)]">${new Date(run.startedAtMs).toLocaleString()}</span>
+        <span class="text-xs text-[var(--muted)]"><time data-epoch-ms="${run.startedAtMs}">${new Date(run.startedAtMs).toISOString()}</time></span>
         <span class="cron-badge ${run.status}">${run.status}</span>
         <span class="text-xs text-[var(--muted)]">${run.durationMs}ms</span>
         ${run.error && html`<span class="text-xs text-[var(--error)]">${run.error}</span>`}

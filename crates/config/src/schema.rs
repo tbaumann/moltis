@@ -24,6 +24,44 @@ pub struct UserProfile {
     pub timezone: Option<String>,
 }
 
+/// Resolved identity combining agent identity and user profile.
+/// Used as the API response for `identity_get` and in the gon data blob.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedIdentity {
+    pub name: String,
+    pub emoji: Option<String>,
+    pub creature: Option<String>,
+    pub vibe: Option<String>,
+    pub soul: Option<String>,
+    pub user_name: Option<String>,
+}
+
+impl ResolvedIdentity {
+    pub fn from_config(cfg: &MoltisConfig) -> Self {
+        Self {
+            name: cfg.identity.name.clone().unwrap_or_else(|| "moltis".into()),
+            emoji: cfg.identity.emoji.clone(),
+            creature: cfg.identity.creature.clone(),
+            vibe: cfg.identity.vibe.clone(),
+            soul: cfg.identity.soul.clone(),
+            user_name: cfg.user.name.clone(),
+        }
+    }
+}
+
+impl Default for ResolvedIdentity {
+    fn default() -> Self {
+        Self {
+            name: "moltis".into(),
+            emoji: None,
+            creature: None,
+            vibe: None,
+            soul: None,
+            user_name: None,
+        }
+    }
+}
+
 /// Root configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -33,6 +71,7 @@ pub struct MoltisConfig {
     pub skills: SkillsConfig,
     pub channels: ChannelsConfig,
     pub tls: TlsConfig,
+    pub auth: AuthConfig,
     pub identity: AgentIdentity,
     pub user: UserProfile,
     pub hooks: Option<HooksConfig>,
@@ -77,6 +116,14 @@ pub struct ShellHookConfigEntry {
 
 fn default_hook_timeout() -> u64 {
     10
+}
+
+/// Authentication configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AuthConfig {
+    /// When true, authentication is explicitly disabled (no login required).
+    pub disabled: bool,
 }
 
 impl MoltisConfig {

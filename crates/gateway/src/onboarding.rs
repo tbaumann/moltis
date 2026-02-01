@@ -40,7 +40,7 @@ impl OnboardingService for GatewayOnboardingService {
     }
 
     async fn identity_get(&self) -> ServiceResult {
-        Ok(self.inner.identity_get())
+        Ok(serde_json::to_value(self.inner.identity_get()).unwrap_or_default())
     }
 
     async fn identity_update(&self, params: Value) -> ServiceResult {

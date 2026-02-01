@@ -27,6 +27,13 @@ use crate::{
     state::GatewayState,
 };
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 // ── LiveModelService ────────────────────────────────────────────────────────
 
 pub struct LiveModelService {
@@ -254,7 +261,8 @@ impl ChatService for LiveChatService {
 
         // Persist the user message (with optional channel metadata for UI display).
         let channel_meta = params.get("channel").cloned();
-        let mut user_msg = serde_json::json!({"role": "user", "content": &text});
+        let mut user_msg =
+            serde_json::json!({"role": "user", "content": &text, "created_at": now_ms()});
         if let Some(ch) = &channel_meta {
             user_msg["channel"] = ch.clone();
         }
@@ -507,7 +515,7 @@ impl ChatService for LiveChatService {
 
             // Persist assistant response.
             if let Some((response_text, input_tokens, output_tokens)) = assistant_text {
-                let assistant_msg = serde_json::json!({"role": "assistant", "content": response_text, "model": model_id, "provider": provider_name, "inputTokens": input_tokens, "outputTokens": output_tokens});
+                let assistant_msg = serde_json::json!({"role": "assistant", "content": response_text, "model": model_id, "provider": provider_name, "inputTokens": input_tokens, "outputTokens": output_tokens, "created_at": now_ms()});
                 if let Err(e) = session_store
                     .append(&session_key_clone, &assistant_msg)
                     .await
@@ -724,6 +732,7 @@ impl ChatService for LiveChatService {
         let compacted = vec![serde_json::json!({
             "role": "assistant",
             "content": format!("[Conversation Summary]\n\n{summary}"),
+            "created_at": now_ms(),
         })];
 
         self.session_store

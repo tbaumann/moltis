@@ -143,33 +143,25 @@ impl LiveOnboardingService {
             MoltisConfig::default()
         };
 
-        if let Some(v) = params.get("name").and_then(|v| v.as_str()) {
-            config.identity.name = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+        /// Extract an optional non-empty string from JSON, mapping `""` to `None`.
+        fn str_field(params: &Value, key: &str) -> Option<Option<String>> {
+            params
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(|v| (!v.is_empty()).then(|| v.to_string()))
         }
-        if let Some(v) = params.get("emoji").and_then(|v| v.as_str()) {
-            config.identity.emoji = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+
+        if let Some(v) = str_field(&params, "name") {
+            config.identity.name = v;
         }
-        if let Some(v) = params.get("creature").and_then(|v| v.as_str()) {
-            config.identity.creature = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+        if let Some(v) = str_field(&params, "emoji") {
+            config.identity.emoji = v;
         }
-        if let Some(v) = params.get("vibe").and_then(|v| v.as_str()) {
-            config.identity.vibe = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+        if let Some(v) = str_field(&params, "creature") {
+            config.identity.creature = v;
+        }
+        if let Some(v) = str_field(&params, "vibe") {
+            config.identity.vibe = v;
         }
         if let Some(v) = params.get("soul") {
             config.identity.soul = if v.is_null() {
@@ -178,12 +170,8 @@ impl LiveOnboardingService {
                 v.as_str().map(|s| s.to_string()).filter(|s| !s.is_empty())
             };
         }
-        if let Some(v) = params.get("user_name").and_then(|v| v.as_str()) {
-            config.user.name = if v.is_empty() {
-                None
-            } else {
-                Some(v.to_string())
-            };
+        if let Some(v) = str_field(&params, "user_name") {
+            config.user.name = v;
         }
 
         self.save(&config)?;
@@ -211,20 +199,13 @@ impl LiveOnboardingService {
     }
 
     /// Read identity from the config file (for `agent.identity.get`).
-    pub fn identity_get(&self) -> Value {
+    pub fn identity_get(&self) -> moltis_config::ResolvedIdentity {
         if self.config_path.exists()
             && let Ok(cfg) = moltis_config::loader::load_config(&self.config_path)
         {
-            return json!({
-                "name": cfg.identity.name.as_deref().unwrap_or("moltis"),
-                "emoji": cfg.identity.emoji,
-                "creature": cfg.identity.creature,
-                "vibe": cfg.identity.vibe,
-                "soul": cfg.identity.soul,
-                "user_name": cfg.user.name,
-            });
+            return moltis_config::ResolvedIdentity::from_config(&cfg);
         }
-        json!({ "name": "moltis", "avatar": null })
+        moltis_config::ResolvedIdentity::default()
     }
 }
 
@@ -337,9 +318,9 @@ mod tests {
 
         // Verify identity_get reflects updates
         let id = svc.identity_get();
-        assert_eq!(id["name"], "Rex");
-        assert_eq!(id["vibe"], "playful");
-        assert_eq!(id["user_name"], "Alice");
+        assert_eq!(id.name, "Rex");
+        assert_eq!(id.vibe.as_deref(), Some("playful"));
+        assert_eq!(id.user_name.as_deref(), Some("Alice"));
 
         // Update soul
         let res = svc

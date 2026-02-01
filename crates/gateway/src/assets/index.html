@@ -13,7 +13,8 @@
     "preact": "/assets/js/vendor/preact.mjs",
     "preact/hooks": "/assets/js/vendor/preact-hooks.mjs",
     "@preact/signals": "/assets/js/vendor/preact-signals.mjs",
-    "htm/preact": "/assets/js/vendor/htm-preact.mjs"
+    "htm/preact": "/assets/js/vendor/htm-preact.mjs",
+    "luxon": "/assets/js/vendor/luxon.mjs"
   }
 }
 </script>
@@ -52,6 +53,8 @@
 <link rel="modulepreload" href="/assets/js/vendor/preact-hooks.mjs">
 <link rel="modulepreload" href="/assets/js/vendor/preact-signals.mjs">
 <link rel="modulepreload" href="/assets/js/vendor/htm-preact.mjs">
+<link rel="modulepreload" href="/assets/js/vendor/luxon.mjs">
+<link rel="modulepreload" href="/assets/js/time-format.js">
 </head>
 <body>
 
@@ -60,7 +63,7 @@
   <button id="burgerBtn" class="burger-btn" title="Navigation">
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="20" height="20"><path d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
   </button>
-  <a href="/chats" id="titleLink" class="text-base font-medium tracking-wide text-[var(--text-strong)]" style="text-decoration:none;cursor:pointer">moltis</a>
+  <a href="/chats" id="titleLink" class="text-base font-medium tracking-wide text-[var(--text-strong)]" style="text-decoration:none;cursor:pointer"><span id="titleEmoji"></span><span id="titleName">moltis</span></a>
   <span class="status-dot" id="statusDot"></span>
   <span class="text-xs text-[var(--muted)]" id="statusText">disconnected</span>
   <div class="flex-1"></div>
@@ -79,6 +82,18 @@
   </div>
 
 </header>
+
+<!-- Auth disabled warning banner (shown by JS when auth is removed) -->
+<div id="authDisabledBanner" class="auth-disabled-banner" style="display:none">
+  <span>Authentication is disabled. Anyone with network access can control moltis and your computer.</span>
+  <a href="/settings/security" class="auth-disabled-setup">Set up authentication</a>
+</div>
+
+<!-- Onboarding banner (shown when identity is not yet configured) -->
+<div id="onboardingBanner" class="info-banner" style="display:none">
+  <span>Set up your agent's identity to get started.</span>
+  <a href="/settings/identity" class="auth-disabled-setup">Go to settings</a>
+</div>
 
 <!-- Main layout -->
 <div class="flex flex-1 min-h-0 overflow-hidden">

@@ -18,7 +18,14 @@ import { prefetchChannels } from "./page-channels.js";
 import { renderCompactCard } from "./page-chat.js";
 import { fetchProjects } from "./projects.js";
 import { currentPage, currentPrefix, mount } from "./router.js";
-import { bumpSessionCount, fetchSessions, setSessionReplying, setSessionUnread, switchSession } from "./sessions.js";
+import {
+	appendLastMessageTimestamp,
+	bumpSessionCount,
+	fetchSessions,
+	setSessionReplying,
+	setSessionUnread,
+	switchSession,
+} from "./sessions.js";
 import * as S from "./state.js";
 
 // ── Chat event handlers ──────────────────────────────────────
@@ -193,6 +200,7 @@ function handleChatFinal(p, isActive, isChatPage, eventSession) {
 		S.sessionTokens.output += p.outputTokens || 0;
 		updateTokenBar();
 	}
+	appendLastMessageTimestamp(Date.now());
 	S.setStreamEl(null);
 	S.setStreamText("");
 	S.setLastToolOutput("");
@@ -368,8 +376,11 @@ export function connect() {
 	};
 
 	S.ws.onclose = () => {
+		var wasConnected = S.connected;
 		S.setConnected(false);
-		setStatus("", "disconnected \u2014 reconnecting\u2026");
+		if (wasConnected) {
+			setStatus("", "disconnected \u2014 reconnecting\u2026");
+		}
 		S.setStreamEl(null);
 		S.setStreamText("");
 		scheduleReconnect();

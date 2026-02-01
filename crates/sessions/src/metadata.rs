@@ -81,10 +81,12 @@ impl SessionMetadata {
         self.entries
             .entry(key.to_string())
             .and_modify(|e| {
-                if label.is_some() {
+                if let Some(ref l) = label
+                    && e.label.as_deref() != Some(l)
+                {
                     e.label = label.clone();
+                    e.updated_at = now;
                 }
-                e.updated_at = now;
             })
             .or_insert_with(|| SessionEntry {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -304,8 +306,7 @@ impl SqliteSessionMetadata {
             r#"INSERT INTO sessions (key, id, label, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(key) DO UPDATE SET
-                 label = COALESCE(excluded.label, sessions.label),
-                 updated_at = excluded.updated_at"#,
+                 label = COALESCE(excluded.label, sessions.label)"#,
         )
         .bind(key)
         .bind(&id)
