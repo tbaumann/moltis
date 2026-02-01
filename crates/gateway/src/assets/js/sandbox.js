@@ -88,8 +88,10 @@ function populateImageDropdown() {
 				var isCurrent = S.sessionSandboxImage === img.tag;
 				addImageOption(img.tag, isCurrent, `${img.skill_name} (${img.size})`);
 			}
-			})
-		.catch(() => {});
+		})
+		.catch(() => {
+			// Silently ignore fetch errors for image list
+		});
 }
 
 function addImageOption(tag, isActive, subtitle) {
@@ -119,7 +121,6 @@ function addImageOption(tag, isActive, subtitle) {
 
 	S.sandboxImageDropdown.appendChild(opt);
 }
-
 
 function selectImage(tag) {
 	var value = tag || "";
