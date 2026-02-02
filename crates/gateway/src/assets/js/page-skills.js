@@ -151,7 +151,7 @@ function InstallBox() {
 	}
 	return html`<div class="skills-install-box">
     <input ref=${inputRef} type="text" placeholder="owner/repo or full URL (e.g. anthropics/skills)" class="skills-install-input" onKeyDown=${onKey} />
-    <button class="skills-install-btn" onClick=${onInstall} disabled=${installing.value}>
+    <button class="provider-btn" onClick=${onInstall} disabled=${installing.value}>
       ${installing.value ? "Installing\u2026" : "Install"}
     </button>
   </div>`;

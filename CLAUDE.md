@@ -51,6 +51,35 @@ toggle their visibility. This keeps markup in HTML where it belongs and makes
 the structure easier to inspect. Preact components (HTM templates) are the
 exception — they use `html` tagged templates by design.
 
+### Styling and UI Consistency
+
+**Always use Tailwind utility classes instead of inline `style="..."` attributes.**
+This applies to all properties — spacing (`p-4`, `gap-3`), colors
+(`text-[var(--muted)]`, `bg-[var(--surface)]`), typography (`font-mono`,
+`text-xs`, `font-medium`), layout (`flex`, `grid`, `items-center`), borders
+(`border`, `rounded-md`), and anything else Tailwind covers. Only fall back to
+inline styles for truly one-off values that have no Tailwind equivalent (e.g. a
+specific `max-width` or `grid-template-columns` pattern).
+
+Keep buttons, links, and other interactive elements visually consistent with
+the existing UI. Reuse the shared CSS classes defined in `components.css`:
+
+- **Primary action**: `provider-btn` (green background, white text).
+- **Secondary action**: `provider-btn provider-btn-secondary` (surface
+  background, border).
+- **Destructive action**: `provider-btn provider-btn-danger` (red background,
+  white text). Never combine `provider-btn` with inline color overrides for
+  destructive buttons.
+
+When buttons or selects sit next to each other (e.g. in a header row), they
+must share the same height and text size so they look like a cohesive group.
+Use `provider-btn` variants for all of them rather than mixing ad-hoc Tailwind
+button styles with different padding/font sizes.
+
+Before creating a new CSS class, check whether an existing one already covers
+the use case. Duplicating styles (e.g. a second green-button class) leads to
+drift — consolidate instead.
+
 ### Server-Injected Data (gon pattern)
 
 When the frontend needs server-side data **at page load** (before any async

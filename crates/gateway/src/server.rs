@@ -49,8 +49,20 @@ use crate::{
     ws::handle_connection,
 };
 
+#[cfg(feature = "tailscale")]
+use crate::tailscale::{
+    CliTailscaleManager, TailscaleManager, TailscaleMode, validate_tailscale_config,
+};
+
 #[cfg(feature = "tls")]
 use crate::tls::CertManager;
+
+/// Options for tailscale serve/funnel passed from CLI flags.
+#[cfg(feature = "tailscale")]
+pub struct TailscaleOpts {
+    pub mode: String,
+    pub reset_on_exit: bool,
+}
 
 // ── Shared app state ─────────────────────────────────────────────────────────
 
@@ -129,6 +141,13 @@ pub fn build_gateway_app(state: Arc<GatewayState>, methods: Arc<MethodRegistry>)
                 crate::auth_middleware::require_auth,
             ));
 
+        // Mount tailscale routes (protected) when the feature is enabled.
+        #[cfg(feature = "tailscale")]
+        let protected = protected.nest(
+            "/api/tailscale",
+            crate::tailscale_routes::tailscale_router(),
+        );
+
         // Public routes (assets, SPA fallback).
         router
             .route("/assets/v/{version}/{*path}", get(versioned_asset_handler))
@@ -147,6 +166,7 @@ pub async fn start_gateway(
     log_buffer: Option<crate::logs::LogBuffer>,
     config_dir: Option<std::path::PathBuf>,
     data_dir: Option<std::path::PathBuf>,
+    #[cfg(feature = "tailscale")] tailscale_opts: Option<TailscaleOpts>,
 ) -> anyhow::Result<()> {
     // Apply config directory override before loading config.
     if let Some(dir) = config_dir {
@@ -908,6 +928,10 @@ pub async fn start_gateway(
     };
 
     let is_localhost = matches!(bind, "127.0.0.1" | "::1" | "localhost");
+    #[cfg(feature = "tls")]
+    let tls_active_for_state = config.tls.enabled;
+    #[cfg(not(feature = "tls"))]
+    let tls_active_for_state = false;
     let state = GatewayState::with_options(
         resolved_auth,
         services,
@@ -916,8 +940,10 @@ pub async fn start_gateway(
         Some(Arc::clone(&credential_store)),
         webauthn_state,
         is_localhost,
+        tls_active_for_state,
         hook_registry.clone(),
         memory_manager.clone(),
+        port,
     );
 
     // Generate a one-time setup code if setup is pending and auth is not disabled.
@@ -929,6 +955,27 @@ pub async fn start_gateway(
         } else {
             None
         };
+
+    // ── Tailscale Serve/Funnel ─────────────────────────────────────────
+    #[cfg(feature = "tailscale")]
+    let tailscale_mode: TailscaleMode = {
+        // CLI flag overrides config file.
+        let mode_str = tailscale_opts
+            .as_ref()
+            .map(|o| o.mode.clone())
+            .unwrap_or_else(|| config.tailscale.mode.clone());
+        mode_str.parse().unwrap_or(TailscaleMode::Off)
+    };
+    #[cfg(feature = "tailscale")]
+    let tailscale_reset_on_exit = tailscale_opts
+        .as_ref()
+        .map(|o| o.reset_on_exit)
+        .unwrap_or(config.tailscale.reset_on_exit);
+
+    #[cfg(feature = "tailscale")]
+    if tailscale_mode != TailscaleMode::Off {
+        validate_tailscale_config(tailscale_mode, bind, credential_store.is_setup_complete())?;
+    }
 
     // Populate the deferred reference so cron callbacks can reach the gateway.
     let _ = deferred_state.set(Arc::clone(&state));
@@ -1078,10 +1125,15 @@ pub async fn start_gateway(
     let mut lines = vec![
         format!("moltis gateway v{}", state.version),
         format!(
-            "protocol v{}, listening on {}://{}",
+            "protocol v{}, listening on {}://{} ({})",
             moltis_protocol::PROTOCOL_VERSION,
             scheme,
             addr,
+            if tls_active {
+                "HTTP/2 + HTTP/1.1"
+            } else {
+                "HTTP/1.1"
+            },
         ),
         format!("{} methods registered", methods.method_names().len()),
         format!("llm: {}", provider_summary),
@@ -1131,6 +1183,31 @@ pub async fn start_gateway(
         }
         lines.push("run `moltis trust-ca` to remove browser warnings".into());
     }
+    // Tailscale: enable serve/funnel and show in banner.
+    #[cfg(feature = "tailscale")]
+    {
+        if tailscale_mode != TailscaleMode::Off {
+            let manager = CliTailscaleManager::new();
+            let ts_result = match tailscale_mode {
+                TailscaleMode::Serve => manager.enable_serve(port, tls_active).await,
+                TailscaleMode::Funnel => manager.enable_funnel(port, tls_active).await,
+                TailscaleMode::Off => unreachable!(),
+            };
+            match ts_result {
+                Ok(()) => {
+                    if let Ok(Some(hostname)) = manager.hostname().await {
+                        lines.push(format!("tailscale {tailscale_mode}: https://{hostname}"));
+                    } else {
+                        lines.push(format!("tailscale {tailscale_mode}: enabled"));
+                    }
+                },
+                Err(e) => {
+                    warn!("failed to enable tailscale {tailscale_mode}: {e}");
+                    lines.push(format!("tailscale {tailscale_mode}: FAILED ({e})"));
+                },
+            }
+        }
+    }
     let width = lines.iter().map(|l| l.len()).max().unwrap_or(0) + 4;
     info!("┌{}┐", "─".repeat(width));
     for line in &lines {
@@ -1146,6 +1223,22 @@ pub async fn start_gateway(
         if let Err(e) = hooks.dispatch(&payload).await {
             tracing::warn!("GatewayStart hook dispatch failed: {e}");
         }
+    }
+
+    // Register tailscale shutdown hook (reset serve/funnel on exit).
+    #[cfg(feature = "tailscale")]
+    if tailscale_mode != TailscaleMode::Off && tailscale_reset_on_exit {
+        let ts_mode = tailscale_mode;
+        tokio::spawn(async move {
+            // Wait for ctrl-c or shutdown signal.
+            tokio::signal::ctrl_c().await.ok();
+            info!("shutting down tailscale {ts_mode}");
+            let manager = CliTailscaleManager::new();
+            if let Err(e) = manager.disable().await {
+                warn!("failed to reset tailscale on exit: {e}");
+            }
+            std::process::exit(0);
+        });
     }
 
     // Spawn tick timer.
@@ -1399,10 +1492,12 @@ fn is_same_origin(origin: &str, host: &str) -> bool {
 #[derive(serde::Serialize)]
 struct GonData {
     identity: moltis_config::ResolvedIdentity,
+    port: u16,
 }
 
 #[cfg(feature = "web-ui")]
 async fn build_gon_data(gw: &GatewayState) -> GonData {
+    let port = gw.port;
     let identity = gw
         .services
         .onboarding
@@ -1411,7 +1506,7 @@ async fn build_gon_data(gw: &GatewayState) -> GonData {
         .ok()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
-    GonData { identity }
+    GonData { identity, port }
 }
 
 #[cfg(feature = "web-ui")]
