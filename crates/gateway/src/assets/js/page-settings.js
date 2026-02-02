@@ -1308,11 +1308,15 @@ function TailscaleSection() {
 
 	return html`<div ref=${ref} class="flex-1 flex flex-col min-w-0 p-4 gap-4 overflow-y-auto">
 		<h2 class="text-lg font-medium text-[var(--text-strong)]">Tailscale</h2>
-		<p class="text-xs text-[var(--muted)] leading-relaxed" style="max-width:600px;margin:0;">
+		<p class="text-xs text-[var(--muted)] leading-relaxed max-w-form" style="margin:0;">
 			Expose the gateway via Tailscale Serve (tailnet-only HTTPS) or Funnel
 			(public HTTPS). The gateway stays bound to localhost; Tailscale proxies
 			traffic to it.
 		</p>
+		<div class="alert-warning-text max-w-form">
+			<span class="alert-label-warn">Warning:</span>${" "}
+			Enabling Funnel exposes moltis to the public internet. This code has not been security-audited. Use at your own risk.
+		</div>
 	</div>`;
 }
 

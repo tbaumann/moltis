@@ -771,6 +771,7 @@
 
   /* Max width for form-like sections */
   .max-w-form { max-width: 600px; }
+  .ml-2 { margin-left: 8px; }
 
   .settings-alert-error {
     background: color-mix(in srgb, var(--error) 12%, transparent);
