@@ -152,19 +152,72 @@ The gateway API uses role-based access control with scopes:
 |-------|-------------|
 | `operator.read` | View status, list jobs, read history |
 | `operator.write` | Send messages, create jobs, modify configuration |
-| `operator.admin` | All permissions including authentication management |
+| `operator.admin` | All permissions (includes all other scopes) |
 | `operator.approvals` | Handle command approval requests |
 | `operator.pairing` | Manage device/node pairing |
 
 ### API Keys
 
-Generate API keys for programmatic access:
+API keys authenticate external tools and scripts connecting to Moltis. Keys can
+have **full access** (all scopes) or be restricted to specific scopes for
+defense-in-depth.
+
+#### Creating API Keys
+
+**Web UI**: Settings > Security > API Keys
+
+1. Enter a label describing the key's purpose
+2. Choose "Full access" or select specific scopes
+3. Click "Generate key"
+4. **Copy the key immediately** — it's only shown once
+
+**CLI**:
+
+```bash
+# Full access key
+moltis auth create-api-key --label "CI pipeline"
+
+# Scoped key (comma-separated scopes)
+moltis auth create-api-key --label "Monitor" --scopes "operator.read"
+moltis auth create-api-key --label "Automation" --scopes "operator.read,operator.write"
+```
+
+#### Using API Keys
+
+Pass the key in the `connect` handshake over WebSocket:
+
+```json
+{
+  "method": "connect",
+  "params": {
+    "client": { "id": "my-tool", "version": "1.0.0" },
+    "auth": { "api_key": "mk_abc123..." }
+  }
+}
+```
+
+Or use Bearer authentication for REST API calls:
 
 ```
-UI: Settings > API Keys
+Authorization: Bearer mk_abc123...
 ```
 
-API keys inherit the scopes you assign. Use the minimum necessary scopes.
+#### Scope Recommendations
+
+| Use Case | Recommended Scopes |
+|----------|-------------------|
+| Read-only monitoring | `operator.read` |
+| Automated workflows | `operator.read`, `operator.write` |
+| Approval handling | `operator.read`, `operator.approvals` |
+| Full automation | Full access (no scope restrictions) |
+
+**Best practice**: Use the minimum necessary scopes. If a key only needs to
+read status and logs, don't grant `operator.write`.
+
+#### Backward Compatibility
+
+Existing API keys (created before scopes were added) have full access. Newly
+created keys without explicit scopes also have full access.
 
 ## Network Security
 
