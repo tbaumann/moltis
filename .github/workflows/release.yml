@@ -340,7 +340,6 @@ jobs:
           working-directory: target/${{ matrix.target }}/debian
 
       - name: Upload .deb artifact
-        if: ${{ env.RELEASE_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moltis-${{ matrix.arch }}.deb
@@ -350,6 +349,7 @@ jobs:
             target/${{ matrix.target }}/debian/*.sha512
             target/${{ matrix.target }}/debian/*.sig
             target/${{ matrix.target }}/debian/*.crt
+          if-no-files-found: ignore
 
   build-rpm:
     needs: [clippy, test, e2e]
@@ -433,7 +433,6 @@ jobs:
           working-directory: target/${{ matrix.target }}/generate-rpm
 
       - name: Upload .rpm artifact
-        if: ${{ env.RELEASE_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moltis-${{ matrix.arch }}.rpm
@@ -443,6 +442,7 @@ jobs:
             target/${{ matrix.target }}/generate-rpm/*.sha512
             target/${{ matrix.target }}/generate-rpm/*.sig
             target/${{ matrix.target }}/generate-rpm/*.crt
+          if-no-files-found: ignore
 
   build-arch:
     needs: [clippy, test, e2e]
@@ -547,7 +547,6 @@ jobs:
           files: moltis-${{ steps.version.outputs.version }}-1-${{ matrix.arch }}.pkg.tar.zst
 
       - name: Upload .pkg.tar.zst artifact
-        if: ${{ env.RELEASE_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moltis-${{ matrix.arch }}.pkg.tar.zst
@@ -557,6 +556,7 @@ jobs:
             *.pkg.tar.zst.sha512
             *.pkg.tar.zst.sig
             *.pkg.tar.zst.crt
+          if-no-files-found: ignore
 
   build-appimage:
     needs: [clippy, test, e2e]
@@ -684,7 +684,6 @@ jobs:
           files: moltis-${{ steps.version.outputs.version }}-${{ matrix.arch }}.AppImage
 
       - name: Upload AppImage artifact
-        if: ${{ env.RELEASE_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moltis-${{ matrix.arch }}.AppImage
@@ -694,6 +693,7 @@ jobs:
             *.AppImage.sha512
             *.AppImage.sig
             *.AppImage.crt
+          if-no-files-found: ignore
 
   build-snap:
     needs: [clippy, test, e2e]
@@ -743,7 +743,6 @@ jobs:
           files: ${{ steps.build-snap.outputs.snap }}
 
       - name: Upload Snap artifact
-        if: ${{ env.RELEASE_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moltis.snap
@@ -753,6 +752,7 @@ jobs:
             ${{ steps.build-snap.outputs.snap }}.sha512
             ${{ steps.build-snap.outputs.snap }}.sig
             ${{ steps.build-snap.outputs.snap }}.crt
+          if-no-files-found: ignore
 
   build-homebrew-binaries:
     needs: [clippy, test, e2e]
@@ -849,7 +849,6 @@ jobs:
           files: moltis-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz
 
       - name: Upload binary artifact
-        if: ${{ env.RELEASE_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moltis-${{ matrix.target }}
@@ -859,6 +858,7 @@ jobs:
             *.tar.gz.sha512
             *.tar.gz.sig
             *.tar.gz.crt
+          if-no-files-found: ignore
 
   build-macos-app:
     needs: [clippy, test, e2e]
@@ -942,7 +942,6 @@ jobs:
           files: moltis-${{ steps.version.outputs.version }}-macos.app.zip
 
       - name: Upload macOS app artifact
-        if: ${{ env.RELEASE_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moltis-macos-app
@@ -952,6 +951,7 @@ jobs:
             *.app.zip.sha512
             *.app.zip.sig
             *.app.zip.crt
+          if-no-files-found: ignore
 
   build-windows-exe:
     needs: [clippy, test, e2e]
@@ -1037,7 +1037,6 @@ jobs:
           files: moltis-${{ steps.version.outputs.version }}-${{ env.BUILD_TARGET }}.exe
 
       - name: Upload .exe artifact
-        if: ${{ env.RELEASE_DRY_RUN != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: moltis-${{ env.BUILD_TARGET }}.exe
@@ -1047,6 +1046,7 @@ jobs:
             *.exe.sha512
             *.exe.sig
             *.exe.crt
+          if-no-files-found: ignore
 
   build-docker:
     needs: [clippy, test, e2e]
