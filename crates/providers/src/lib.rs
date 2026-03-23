@@ -649,7 +649,7 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     if model_id.starts_with("kimi-") {
         return 128_000;
     }
-    // MiniMax M2/M2.1/M2.5: 204,800.
+    // MiniMax M2/M2.1/M2.5/M2.7: 204,800.
     if model_id.starts_with("MiniMax-") {
         return 204_800;
     }
