@@ -197,38 +197,46 @@ fn launchd_plist_path() -> anyhow::Result<PathBuf> {
         .join(format!("{LAUNCHD_LABEL}.plist")))
 }
 
+/// Escape special XML characters for safe interpolation into plist values.
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
 /// Generate a launchd plist XML string.
 pub fn generate_launchd_plist(
     moltis_bin: &Path,
     config: &ServiceConfig,
     log_path: &Path,
 ) -> String {
-    let bin = moltis_bin.display();
-    let log = log_path.display();
+    let bin = xml_escape(&moltis_bin.display().to_string());
+    let log = xml_escape(&log_path.display().to_string());
 
     let mut args = vec![
         format!("    <string>{bin}</string>"),
         "    <string>node</string>".to_string(),
         "    <string>run</string>".to_string(),
         format!("    <string>--host</string>"),
-        format!("    <string>{}</string>", config.gateway_url),
+        format!("    <string>{}</string>", xml_escape(&config.gateway_url)),
         format!("    <string>--token</string>"),
-        format!("    <string>{}</string>", config.device_token),
+        format!("    <string>{}</string>", xml_escape(&config.device_token)),
         format!("    <string>--timeout</string>"),
         format!("    <string>{}</string>", config.timeout),
     ];
 
     if let Some(ref id) = config.node_id {
         args.push("    <string>--node-id</string>".to_string());
-        args.push(format!("    <string>{id}</string>"));
+        args.push(format!("    <string>{}</string>", xml_escape(id)));
     }
     if let Some(ref name) = config.display_name {
         args.push("    <string>--name</string>".to_string());
-        args.push(format!("    <string>{name}</string>"));
+        args.push(format!("    <string>{}</string>", xml_escape(name)));
     }
     if let Some(ref dir) = config.working_dir {
         args.push("    <string>--working-dir</string>".to_string());
-        args.push(format!("    <string>{dir}</string>"));
+        args.push(format!("    <string>{}</string>", xml_escape(dir)));
     }
 
     let args_str = args.join("\n");
@@ -420,13 +428,13 @@ pub fn generate_systemd_unit(moltis_bin: &Path, config: &ServiceConfig, log_path
     );
 
     if let Some(ref id) = config.node_id {
-        exec_args.push_str(&format!(" --node-id {id}"));
+        exec_args.push_str(&format!(" --node-id \"{}\"", id.replace('"', "\\\"")));
     }
     if let Some(ref name) = config.display_name {
-        exec_args.push_str(&format!(" --name {name}"));
+        exec_args.push_str(&format!(" --name \"{}\"", name.replace('"', "\\\"")));
     }
     if let Some(ref dir) = config.working_dir {
-        exec_args.push_str(&format!(" --working-dir {dir}"));
+        exec_args.push_str(&format!(" --working-dir \"{}\"", dir.replace('"', "\\\"")));
     }
 
     format!(
