@@ -145,6 +145,10 @@ test.describe("Sandboxes page – Running Containers", () => {
 		await mockSandboxAvailable(page);
 	});
 
+	test.afterEach(async ({ page }) => {
+		await page.unrouteAll({ behavior: "ignoreErrors" });
+	});
+
 	test("running containers section renders with heading and refresh button", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 
@@ -341,6 +345,10 @@ test.describe("Sandboxes page – Running Containers", () => {
 test.describe("Sandboxes page – Container error handling", () => {
 	test.beforeEach(async ({ page }) => {
 		await mockSandboxAvailable(page);
+	});
+
+	test.afterEach(async ({ page }) => {
+		await page.unrouteAll({ behavior: "ignoreErrors" });
 	});
 
 	test("delete failure shows error message that clears on refresh", async ({ page }) => {
