@@ -15,36 +15,33 @@ test.describe("send_document rendering", () => {
 			const prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
 			const events = await import(`${prefix}js/events.js`);
 
-			// Simulate tool_call event to create the tool card
-			events.eventListeners.forEach((fn) => {
-				fn({
-					type: "tool_call",
-					session: "main",
-					data: {
-						id: "test-doc-call",
-						name: "send_document",
-						args: { path: "/tmp/report.pdf" },
-					},
-				});
+			function dispatchChat(payload) {
+				var listeners = events.eventListeners["chat"] || [];
+				for (var fn of listeners) fn(payload);
+			}
+
+			// Simulate tool_call_start to create the tool card
+			dispatchChat({
+				state: "tool_call_start",
+				sessionKey: "main",
+				toolCallId: "test-doc-call",
+				toolName: "send_document",
+				arguments: JSON.stringify({ path: "/tmp/report.pdf" }),
 			});
 
-			// Simulate tool_result event with document_ref
-			events.eventListeners.forEach((fn) => {
-				fn({
-					type: "tool_result",
-					session: "main",
-					data: {
-						id: "test-doc-call",
-						success: true,
-						result: {
-							document_ref: "media/main/abc123_report.pdf",
-							mime_type: "application/pdf",
-							filename: "report.pdf",
-							size_bytes: 12345,
-							sent: true,
-						},
-					},
-				});
+			// Simulate tool_call_end with document_ref result
+			dispatchChat({
+				state: "tool_call_end",
+				sessionKey: "main",
+				toolCallId: "test-doc-call",
+				toolName: "send_document",
+				success: true,
+				result: {
+					document_ref: "media/main/abc123_report.pdf",
+					mime_type: "application/pdf",
+					filename: "report.pdf",
+					size_bytes: 12345,
+				},
 			});
 		});
 
@@ -85,34 +82,31 @@ test.describe("send_document rendering", () => {
 			const prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
 			const events = await import(`${prefix}js/events.js`);
 
-			events.eventListeners.forEach((fn) => {
-				fn({
-					type: "tool_call",
-					session: "main",
-					data: {
-						id: "test-zip-call",
-						name: "send_document",
-						args: { path: "/tmp/archive.zip" },
-					},
-				});
+			function dispatchChat(payload) {
+				var listeners = events.eventListeners["chat"] || [];
+				for (var fn of listeners) fn(payload);
+			}
+
+			dispatchChat({
+				state: "tool_call_start",
+				sessionKey: "main",
+				toolCallId: "test-zip-call",
+				toolName: "send_document",
+				arguments: JSON.stringify({ path: "/tmp/archive.zip" }),
 			});
 
-			events.eventListeners.forEach((fn) => {
-				fn({
-					type: "tool_result",
-					session: "main",
-					data: {
-						id: "test-zip-call",
-						success: true,
-						result: {
-							document_ref: "media/main/def456_archive.zip",
-							mime_type: "application/zip",
-							filename: "archive.zip",
-							size_bytes: 5242880,
-							sent: true,
-						},
-					},
-				});
+			dispatchChat({
+				state: "tool_call_end",
+				sessionKey: "main",
+				toolCallId: "test-zip-call",
+				toolName: "send_document",
+				success: true,
+				result: {
+					document_ref: "media/main/def456_archive.zip",
+					mime_type: "application/zip",
+					filename: "archive.zip",
+					size_bytes: 5242880,
+				},
 			});
 		});
 
@@ -145,34 +139,31 @@ test.describe("send_document rendering", () => {
 			const prefix = appUrl.href.slice(0, appUrl.href.length - "js/app.js".length);
 			const events = await import(`${prefix}js/events.js`);
 
-			events.eventListeners.forEach((fn) => {
-				fn({
-					type: "tool_call",
-					session: "main",
-					data: {
-						id: "test-csv-call",
-						name: "send_document",
-						args: { path: "/tmp/data.csv" },
-					},
-				});
+			function dispatchChat(payload) {
+				var listeners = events.eventListeners["chat"] || [];
+				for (var fn of listeners) fn(payload);
+			}
+
+			dispatchChat({
+				state: "tool_call_start",
+				sessionKey: "main",
+				toolCallId: "test-csv-call",
+				toolName: "send_document",
+				arguments: JSON.stringify({ path: "/tmp/data.csv" }),
 			});
 
-			events.eventListeners.forEach((fn) => {
-				fn({
-					type: "tool_result",
-					session: "main",
-					data: {
-						id: "test-csv-call",
-						success: true,
-						result: {
-							document_ref: "media/main/ghi789_data.csv",
-							mime_type: "text/csv",
-							filename: "data.csv",
-							size_bytes: 256,
-							sent: true,
-						},
-					},
-				});
+			dispatchChat({
+				state: "tool_call_end",
+				sessionKey: "main",
+				toolCallId: "test-csv-call",
+				toolName: "send_document",
+				success: true,
+				result: {
+					document_ref: "media/main/ghi789_data.csv",
+					mime_type: "text/csv",
+					filename: "data.csv",
+					size_bytes: 256,
+				},
 			});
 		});
 
