@@ -718,9 +718,9 @@ mod tests {
         assert!(unit.contains("/usr/bin/moltis node run"));
         assert!(unit.contains("ws://gw:9090/ws"));
         assert!(unit.contains("tok_sys"));
-        assert!(unit.contains("--node-id sys-node"));
-        assert!(unit.contains("--name Server"));
-        assert!(unit.contains("--working-dir /srv"));
+        assert!(unit.contains("--node-id \"sys-node\""));
+        assert!(unit.contains("--name \"Server\""));
+        assert!(unit.contains("--working-dir \"/srv\""));
         assert!(unit.contains("--timeout 600"));
         assert!(unit.contains("Restart=on-failure"));
         assert!(unit.contains("RestartSec=10"));
