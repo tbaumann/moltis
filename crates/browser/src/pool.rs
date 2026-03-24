@@ -744,7 +744,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn set_container_dir_permissions_makes_world_writable() -> Result<(), Box<dyn std::error::Error>> {
+    fn set_container_dir_permissions_makes_world_writable() -> Result<(), Box<dyn std::error::Error>>
+    {
         use std::os::unix::fs::PermissionsExt;
 
         let tmp = tempfile::tempdir()?;
