@@ -6615,7 +6615,13 @@ async fn run_with_tools(
 
                     // Reload compacted history and retry.
                     let compacted_history_raw = store.read(session_key).await.unwrap_or_default();
-                    let compacted_chat = values_to_chat_messages(&compacted_history_raw);
+                    let mut compacted_chat = values_to_chat_messages(&compacted_history_raw);
+                    // Re-inject datetime so the retry has current time context.
+                    if let Some(datetime_msg) =
+                        moltis_agents::prompt::runtime_datetime_message(runtime_context)
+                    {
+                        compacted_chat.push(ChatMessage::system(&datetime_msg));
+                    }
                     let retry_hist = if compacted_chat.is_empty() {
                         None
                     } else {
