@@ -435,6 +435,11 @@ Body.
         let meta = parse_metadata(content, &skill_dir).unwrap();
         assert_eq!(meta.name, "seo");
         assert_eq!(meta.display_name.as_deref(), Some("SEO (Audit + Writer)"));
+        // Slug came from _meta.json, not frontmatter, so meta.slug stays None.
+        assert!(
+            meta.slug.is_none(),
+            "slug comes from _meta.json, not frontmatter, so meta.slug should remain None"
+        );
     }
 
     #[test]

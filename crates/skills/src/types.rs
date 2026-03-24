@@ -123,6 +123,10 @@ pub enum SkillSource {
 
 /// Lightweight metadata parsed from SKILL.md frontmatter.
 /// Loaded at startup for all discovered skills (cheap).
+///
+/// `Default::default()` leaves `name` as `""` (invalid per `validate_name`).
+/// Always initialise `name` explicitly, e.g.
+/// `SkillMetadata { name: "my-skill".into(), ..Default::default() }`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillMetadata {
     /// Internal skill name — lowercase, hyphens allowed, 1-64 chars.
