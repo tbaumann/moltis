@@ -1486,14 +1486,18 @@ impl GatewayServices {
     /// The `system_info` service is provided separately because it needs the
     /// fully-constructed `GatewayState` which isn't available during
     /// `GatewayServices` construction.
-    pub fn to_services(&self, system_info: Arc<dyn SystemInfoService>) -> Arc<Services> {
+    pub fn to_services_with_chat(
+        &self,
+        system_info: Arc<dyn SystemInfoService>,
+        chat: Arc<dyn ChatService>,
+    ) -> Arc<Services> {
         Arc::new(Services {
             agent: self.agent.clone(),
             session: self.session.clone(),
             channel: self.channel.clone(),
             config: self.config.clone(),
             cron: self.cron.clone(),
-            chat: self.chat.clone(),
+            chat,
             tts: self.tts.clone(),
             stt: self.stt.clone(),
             skills: self.skills.clone(),
@@ -1512,6 +1516,10 @@ impl GatewayServices {
             local_llm: self.local_llm.clone(),
             system_info,
         })
+    }
+
+    pub fn to_services(&self, system_info: Arc<dyn SystemInfoService>) -> Arc<Services> {
+        self.to_services_with_chat(system_info, self.chat.clone())
     }
 }
 
