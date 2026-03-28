@@ -464,7 +464,7 @@ impl LlmProvider for AnthropicProvider {
                 messages_count = anthropic_messages.len(),
                 tools_count = tools.len(),
                 has_system = system_value.is_some(),
-            caching = caching,
+                caching = caching,
                 reasoning_effort = ?self.reasoning_effort,
                 "anthropic stream_with_tools request"
             );
