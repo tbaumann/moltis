@@ -97,7 +97,17 @@ function renderMarkdown(markdown) {
 				html.push('<ul class="list-none m-0 pl-0 space-y-0.5">');
 				inList = true;
 			}
-			html.push(`<li class="font-mono text-[0.8rem] leading-snug text-gray-600 dark:text-gray-300">${renderInline(listItem[1].trim())}</li>`);
+			const raw = listItem[1].trim();
+			const scopeMatch = raw.match(/^\[([^\]]+)\]\s*(.*)$/);
+			let inner;
+			if (scopeMatch) {
+				const scope = escapeHtml(scopeMatch[1]);
+				const rest = renderInline(scopeMatch[2]);
+				inner = `<span class="inline-block w-[7rem] shrink-0 text-right pr-2 text-gray-400 dark:text-gray-500 select-none">[${scope}]</span><span>${rest}</span>`;
+			} else {
+				inner = `<span class="inline-block w-[7rem] shrink-0"></span><span>${renderInline(raw)}</span>`;
+			}
+			html.push(`<li class="font-mono text-[0.8rem] leading-snug text-gray-600 dark:text-gray-300 flex">${inner}</li>`);
 			continue;
 		}
 
