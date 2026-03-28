@@ -830,7 +830,11 @@ function saveAndFinishProvider(provider, keyVal, endpointVal, modelVal, selected
 					return;
 				}
 				if (modelTimedOut) {
-					console.warn("models.test timed out for", modelForTest, "— saving model anyway (local servers may need longer to load)");
+					console.warn(
+						"models.test timed out for",
+						modelForTest,
+						"— saving model anyway (local servers may need longer to load)",
+					);
 				}
 				await sendRpc("providers.save_model", { provider: savedProviderName, model: modelForStorage });
 				if (modelServiceUnavailable) {
