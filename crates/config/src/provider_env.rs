@@ -148,6 +148,17 @@ mod tests {
     }
 
     #[test]
+    fn normalize_zai_code_aliases() {
+        for alias in &["zai-code", "zai-coding", "zhipu-code"] {
+            assert_eq!(
+                normalize_provider_name(alias).as_deref(),
+                Some("zai-code"),
+                "expected alias {alias:?} to normalize to \"zai-code\""
+            );
+        }
+    }
+
+    #[test]
     fn generic_provider_env_accepts_mixed_namespace_pairs() {
         let env_overrides = HashMap::from([
             ("MOLTIS_PROVIDER".to_string(), "openai".to_string()),
