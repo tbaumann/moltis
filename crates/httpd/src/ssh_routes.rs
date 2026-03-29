@@ -33,6 +33,23 @@ const SSH_HOST_SCAN_FAILED: &str = "SSH_HOST_SCAN_FAILED";
 const SSH_HOST_PIN_FAILED: &str = "SSH_HOST_PIN_FAILED";
 const SSH_HOST_PIN_CLEAR_FAILED: &str = "SSH_HOST_PIN_CLEAR_FAILED";
 
+fn validate_ssh_target_value(target: &str) -> Result<&str, ApiError> {
+    let target = target.trim();
+    if target.is_empty() {
+        return Err(ApiError::bad_request(
+            SSH_TARGET_REQUIRED,
+            "target is required",
+        ));
+    }
+    if target.starts_with('-') {
+        return Err(ApiError::bad_request(
+            SSH_TARGET_REQUIRED,
+            "target must be a user@host or hostname, not an ssh option",
+        ));
+    }
+    Ok(target)
+}
+
 #[derive(Serialize)]
 pub struct SshStatusResponse {
     keys: Vec<SshKeyEntry>,
@@ -342,12 +359,7 @@ pub async fn ssh_create_target(
             "target label is required",
         ));
     }
-    if body.target.trim().is_empty() {
-        return Err(ApiError::bad_request(
-            SSH_TARGET_REQUIRED,
-            "target is required",
-        ));
-    }
+    let target = validate_ssh_target_value(&body.target)?;
     let known_host = body
         .known_host
         .as_deref()
@@ -362,7 +374,7 @@ pub async fn ssh_create_target(
     let id = store
         .create_ssh_target(
             &body.label,
-            &body.target,
+            target,
             body.port,
             known_host,
             body.auth_mode,
@@ -440,13 +452,7 @@ pub async fn ssh_test_target(
 pub async fn ssh_scan_host_key(
     Json(body): Json<ScanHostRequest>,
 ) -> Result<SshHostScanResponse, ApiError> {
-    let target = body.target.trim();
-    if target.is_empty() {
-        return Err(ApiError::bad_request(
-            SSH_TARGET_REQUIRED,
-            "target is required",
-        ));
-    }
+    let target = validate_ssh_target_value(&body.target)?;
     let scan = scan_target_known_host(target, body.port)
         .await
         .map_err(|err| ApiError::bad_request(SSH_HOST_SCAN_FAILED, err.to_string()))?;
@@ -931,7 +937,12 @@ async fn resolve_scan_target(
     target: &str,
     port: Option<u16>,
 ) -> anyhow::Result<ResolvedScanTarget> {
-    let output = Command::new("ssh").arg("-G").arg(target).output().await;
+    let output = Command::new("ssh")
+        .arg("-G")
+        .arg("--")
+        .arg(target)
+        .output()
+        .await;
     if let Ok(output) = output
         && output.status.success()
     {
@@ -1259,6 +1270,16 @@ mod tests {
         assert_eq!(
             classify_ssh_failure("Permission denied (publickey).").map(|classified| classified.0),
             Some("auth_failed")
+        );
+    }
+
+    #[test]
+    fn validate_ssh_target_value_rejects_option_like_targets() {
+        let error = validate_ssh_target_value("  -oProxyCommand=sh ").unwrap_err();
+        assert_eq!(error.code, SSH_TARGET_REQUIRED);
+        assert_eq!(
+            error.message,
+            "target must be a user@host or hostname, not an ssh option"
         );
     }
 

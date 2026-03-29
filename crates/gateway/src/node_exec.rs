@@ -264,10 +264,13 @@ async fn exec_over_ssh(
     if let Some(port) = port {
         ssh.arg("-p").arg(port.to_string());
     }
-    ssh.arg(target).arg(format!(
+    let remote_command = format!(
         "sh -lc {}",
         shell_single_quote(&build_remote_shell_script(command, cwd, env))
-    ));
+    );
+    for arg in ssh_destination_args(target, remote_command) {
+        ssh.arg(arg);
+    }
     ssh.stdout(std::process::Stdio::piped());
     ssh.stderr(std::process::Stdio::piped());
     ssh.stdin(std::process::Stdio::null());
@@ -528,6 +531,10 @@ fn build_remote_shell_script(
 
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn ssh_destination_args(target: &str, remote_command: String) -> [String; 3] {
+    ["--".to_string(), target.to_string(), remote_command]
 }
 
 /// Filter environment variables to the safe allowlist.
@@ -975,5 +982,15 @@ mod tests {
         assert!(!script.contains("LC_$(id)"));
         assert!(!script.contains("OPENAI_API_KEY"));
         assert!(script.ends_with("printf '%s' hi"));
+    }
+
+    #[test]
+    fn ssh_destination_args_insert_end_of_options_separator() {
+        let args = ssh_destination_args("deploy@example.com", "sh -lc 'true'".to_string());
+        assert_eq!(args, [
+            "--".to_string(),
+            "deploy@example.com".to_string(),
+            "sh -lc 'true'".to_string()
+        ]);
     }
 }
