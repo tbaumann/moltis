@@ -79,7 +79,7 @@ if [[ "$SKIP_KEY" != true ]]; then
     echo "error: failed to fetch GPG key from $GPG_KEY_URL" >&2
     exit 1
   fi
-  echo "$KEY_DATA" | gpg --import 2>&1 | grep -E '(imported|not changed|unchanged)'
+  echo "$KEY_DATA" | gpg --import 2>&1 || true
   echo ""
 fi
 
