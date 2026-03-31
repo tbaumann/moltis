@@ -661,7 +661,7 @@ test.describe("Session management", () => {
 		const channelKey = `telegram:bot:rename-test-${Date.now()}`;
 		await expectRpcOk(page, "sessions.switch", { key: channelKey });
 
-		// Set a channel binding on the session so it's treated as channel-bound.
+		// Give the session an initial display name before the rename step.
 		await expectRpcOk(page, "sessions.patch", { key: channelKey, label: "Telegram 1" });
 
 		// Switch to the channels tab so the session is visible.
@@ -675,13 +675,12 @@ test.describe("Session management", () => {
 		await channelItem.click();
 
 		// The session name should be visible and clickable for rename.
-		const sessionName = page.locator(".chat-session-name");
+		const sessionName = page.getByTitle("Click to rename");
 		await expect(sessionName).toBeVisible({ timeout: 5_000 });
-		await expect(sessionName).toHaveAttribute("title", "Click to rename");
 
 		// Click to start rename.
 		await sessionName.click();
-		const renameInput = page.locator(".chat-session-rename-input");
+		const renameInput = page.getByRole("textbox");
 		await expect(renameInput).toBeVisible({ timeout: 5_000 });
 
 		// Type a new name and press Enter.
