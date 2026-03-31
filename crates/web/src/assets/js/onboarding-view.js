@@ -2232,9 +2232,10 @@ function ChannelTypeSelector({ onSelect, offered }) {
 		}
 		${
 			offered.has("msteams") &&
-			html`<button type="button" class="backend-card flex-1 items-center gap-3 py-6" onClick=${() => onSelect("msteams")}>
+			html`<button type="button" class="backend-card flex-1 items-center gap-3 py-6 relative" onClick=${() => onSelect("msteams")}>
 			<span class="icon icon-xl icon-msteams"></span>
 			<span class="text-sm font-medium text-[var(--text-strong)]">Microsoft Teams</span>
+			<span class="text-[9px] text-[var(--muted)] opacity-70">Requires public URL</span>
 		</button>`
 		}
 		${
@@ -2340,6 +2341,48 @@ function TeamsForm({ onConnected, error, setError }) {
 	var [baseUrl, setBaseUrl] = useState(defaultTeamsBaseUrl());
 	var [bootstrapEndpoint, setBootstrapEndpoint] = useState("");
 	var [saving, setSaving] = useState(false);
+	var [tsStatus, setTsStatus] = useState(null);
+	var [tsLoading, setTsLoading] = useState(true);
+	var [enablingFunnel, setEnablingFunnel] = useState(false);
+
+	// Fetch Tailscale status on mount to auto-detect public URL.
+	useEffect(() => {
+		fetch("/api/tailscale/status")
+			.then((r) => (r.ok ? r.json() : null))
+			.then((data) => {
+				setTsStatus(data);
+				setTsLoading(false);
+				// Auto-fill base URL if Funnel is active.
+				if (data?.mode === "funnel" && data?.url) {
+					setBaseUrl(data.url.replace(/\/$/, ""));
+				}
+			})
+			.catch(() => setTsLoading(false));
+	}, []);
+
+	function onEnableFunnel() {
+		setEnablingFunnel(true);
+		setError(null);
+		fetch("/api/tailscale/configure", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ mode: "funnel" }),
+		})
+			.then((r) => r.json())
+			.then((data) => {
+				setEnablingFunnel(false);
+				if (data?.ok !== false && data?.url) {
+					setBaseUrl(data.url.replace(/\/$/, ""));
+					setTsStatus(data);
+				} else {
+					setError(data?.error || "Failed to enable Tailscale Funnel. Check server logs.");
+				}
+			})
+			.catch((e) => {
+				setEnablingFunnel(false);
+				setError(`Tailscale error: ${e.message}`);
+			});
+	}
 
 	function onBootstrap() {
 		var id = appId.trim();
@@ -2395,7 +2438,39 @@ function TeamsForm({ onConnected, error, setError }) {
 		});
 	}
 
+	var isFunnelActive = tsStatus?.mode === "funnel" && tsStatus?.url;
+	var hasTailscale = tsStatus?.installed && tsStatus?.tailscale_up;
+	var isLocalUrl =
+		!baseUrl ||
+		/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])/i.test(baseUrl) ||
+		baseUrl === defaultTeamsBaseUrl();
+
 	return html`<form onSubmit=${onSubmit} class="flex flex-col gap-3">
+		${
+			!tsLoading &&
+			!isFunnelActive &&
+			html`<div class="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs flex flex-col gap-2">
+			<span class="font-medium text-[var(--text-strong)]">Public URL required</span>
+			<span class="text-[var(--muted)]">Microsoft Teams sends messages to your server via webhook. Your Moltis instance must be reachable from the internet over HTTPS.</span>
+			${
+				hasTailscale
+					? html`<div class="flex flex-col gap-2">
+					<span class="text-[var(--muted)]">Tailscale is connected but not exposing this server publicly. Enable <strong>Funnel</strong> to make it reachable:</span>
+					<button type="button" class="provider-btn provider-btn-sm" onClick=${onEnableFunnel} disabled=${enablingFunnel}>
+						${enablingFunnel ? "Enabling Funnel\u2026" : "Enable Tailscale Funnel"}
+					</button>
+				</div>`
+					: html`<span class="text-[var(--muted)]">Options: enable <strong>Tailscale Funnel</strong> in Settings, or use <a href="https://ngrok.com/" target="_blank" class="text-[var(--accent)] underline">ngrok</a> / <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/" target="_blank" class="text-[var(--accent)] underline">Cloudflare Tunnel</a>, or deploy to a cloud server.</span>`
+			}
+		</div>`
+		}
+		${
+			isFunnelActive &&
+			html`<div class="rounded-md border border-green-500/30 bg-green-500/5 p-3 text-xs flex items-center gap-2">
+			<span class="text-green-600">\u2713</span>
+			<span class="text-[var(--muted)]">Tailscale Funnel is active \u2014 your server is publicly reachable at <strong>${tsStatus.url}</strong></span>
+		</div>`
+		}
 		<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)] flex flex-col gap-2">
 			<span class="font-medium text-[var(--text-strong)]">How to create a Teams bot</span>
 			<span class="font-medium text-[var(--text-strong)] text-[10px] opacity-70">Option A: Teams Developer Portal (easiest)</span>
@@ -2436,7 +2511,11 @@ function TeamsForm({ onConnected, error, setError }) {
 			<input type="text" class="provider-key-input w-full"
 				value=${baseUrl} onInput=${(e) => setBaseUrl(e.target.value)}
 				placeholder="https://bot.example.com" />
-			<div class="text-[10px] text-[var(--muted)] mt-1 opacity-70">Teams requires HTTPS. For local dev, use <a href="https://ngrok.com/" target="_blank" class="text-[var(--accent)] underline">ngrok</a> or <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/" target="_blank" class="text-[var(--accent)] underline">Cloudflare Tunnel</a>.</div>
+			${
+				isLocalUrl &&
+				!isFunnelActive &&
+				html`<div class="text-[10px] text-amber-600 mt-1">This looks like a local address. Teams webhooks need a publicly reachable HTTPS URL.</div>`
+			}
 		</div>
 		<div class="flex gap-2">
 			<button type="button" class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${onBootstrap}>Generate Endpoint</button>
