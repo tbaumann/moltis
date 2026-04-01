@@ -3,7 +3,7 @@
 import { signal } from "@preact/signals";
 import { html } from "htm/preact";
 import { render } from "preact";
-import { useEffect } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { onEvent } from "./events.js";
 import { sendRpc } from "./helpers.js";
 import { t } from "./i18n.js";
@@ -182,6 +182,13 @@ function groupProviderRows(models, metaMap) {
 	});
 	for (var providerGroup of result) {
 		providerGroup.models.sort((a, b) => {
+			// Preferred models always come first, then recommended, then by date.
+			var aPref = a.preferred ? 1 : 0;
+			var bPref = b.preferred ? 1 : 0;
+			if (aPref !== bPref) return bPref - aPref;
+			var aRec = a.recommended ? 1 : 0;
+			var bRec = b.recommended ? 1 : 0;
+			if (aRec !== bRec) return bRec - aRec;
 			var aTime = a.createdAt || 0;
 			var bTime = b.createdAt || 0;
 			if (aTime !== bTime) return bTime - aTime;
@@ -191,8 +198,14 @@ function groupProviderRows(models, metaMap) {
 	return result;
 }
 
+var DEFAULT_VISIBLE_MODELS = 3;
+
 function ProviderSection(props) {
 	var group = props.group;
+	var [expanded, setExpanded] = useState(false);
+	var hasMore = group.models.length > DEFAULT_VISIBLE_MODELS;
+	var visibleModels = expanded || !hasMore ? group.models : group.models.slice(0, DEFAULT_VISIBLE_MODELS);
+	var hiddenCount = group.models.length - DEFAULT_VISIBLE_MODELS;
 
 	function onDeleteProvider() {
 		if (deletingProvider.value) return;
@@ -263,11 +276,12 @@ function ProviderSection(props) {
 			group.models.length === 0
 				? html`<div class="mt-2 text-xs text-[var(--muted)]">${t("providers:noActiveModels")}</div>`
 				: html`<div class="mt-2 flex flex-col gap-2">
-					${group.models.map(
+					${visibleModels.map(
 						(model) => html`<div key=${model.id} class="flex items-start justify-between gap-3 py-1">
 							<div class="min-w-0 flex-1">
 								<div class="flex items-center gap-2 min-w-0">
 									<div class="text-sm font-medium text-[var(--text-strong)] truncate">${model.displayName || model.id}</div>
+									${model.preferred ? html`<span class="recommended-badge">${t("providers:preferred")}</span>` : null}
 									${model.unsupported ? html`<span class="provider-item-badge warning" title=${model.unsupportedReason || t("providers:modelNotSupported")}>${t("providers:unsupported")}</span>` : null}
 									${model.supportsTools ? null : html`<span class="provider-item-badge warning">${t("providers:chatOnly")}</span>`}
 									${model.disabled ? html`<span class="provider-item-badge muted">${t("providers:disabled")}</span>` : null}
@@ -280,6 +294,10 @@ function ProviderSection(props) {
 							</button>
 						</div>`,
 					)}
+					${hasMore ? html`<button
+						class="text-xs text-[var(--accent)] cursor-pointer bg-transparent border-none py-1 text-left hover:underline"
+						onClick=${() => setExpanded(!expanded)}
+					>${expanded ? t("providers:showFewerModels") : t("providers:showAllModels", { count: hiddenCount })}</button>` : null}
 				</div>`
 		}
 	</div>`;
