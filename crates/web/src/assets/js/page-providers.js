@@ -287,6 +287,7 @@ function ProviderSection(props) {
 									${model.disabled ? html`<span class="provider-item-badge muted">${t("providers:disabled")}</span>` : null}
 								</div>
 								<div class="mt-1 text-xs text-[var(--muted)] font-mono opacity-75">${model.id}</div>
+								${model.unsupported && model.unsupportedReason ? html`<div class="mt-0.5 text-xs text-[var(--warning)]">${model.unsupportedReason}</div>` : null}
 								${model.createdAt ? html`<time class="mt-0.5 text-xs text-[var(--muted)] opacity-60 block" data-epoch-ms=${model.createdAt * 1000} data-format="year-month"></time>` : null}
 							</div>
 							<button class="provider-btn provider-btn-secondary provider-btn-sm" onClick=${() => onToggleModel(model)}>
