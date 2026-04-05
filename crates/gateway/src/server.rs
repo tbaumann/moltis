@@ -1420,7 +1420,8 @@ pub async fn prepare_gateway_core(
             Arc::clone(&model_store),
             config.chat.priority_models.clone(),
         )
-        .with_show_legacy_models(config.providers.show_legacy_models),
+        .with_show_legacy_models(config.providers.show_legacy_models)
+        .with_discovery_config(effective_providers.clone(), config_env_overrides.clone()),
     );
     services = services
         .with_model(Arc::clone(&live_model_service) as Arc<dyn crate::services::ModelService>);
@@ -1650,6 +1651,9 @@ pub async fn prepare_gateway_core(
         .manager()
         .set_env_overrides(runtime_env_overrides.clone())
         .await;
+    // Update model service env overrides with UI-stored API keys so that
+    // "Detect All Models" can discover models from those providers too.
+    *live_model_service.env_overrides_handle().write().await = runtime_env_overrides.clone();
     live_mcp
         .set_credential_store(Arc::clone(&credential_store))
         .await;
