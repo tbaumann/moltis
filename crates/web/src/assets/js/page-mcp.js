@@ -861,10 +861,10 @@ function ServerCard({ server }) {
 		});
 		if (!timeoutResult.ok) return null;
 
-			var editResult =
-				transport === "sse" || transport === "streamable-http"
-					? buildSseEditPayload(server, editUrl.value, editHeaders.value, clearHeaders.value)
-					: buildStdioEditPayload(editCmd.value, editArgs.value, editEnv.value);
+		var editResult =
+			transport === "sse" || transport === "streamable-http"
+				? buildSseEditPayload(server, editUrl.value, editHeaders.value, clearHeaders.value)
+				: buildStdioEditPayload(editCmd.value, editArgs.value, editEnv.value);
 		if (editResult.error) {
 			showToast(editResult.error, "error");
 			saving.value = false;
@@ -1034,7 +1034,7 @@ function ServerCard({ server }) {
 						}} />
         </div>
         </div>`
-					}
+						}
         <div class="project-edit-group mb-2">
           <div class="text-xs text-[var(--muted)] mb-1">Timeout override (seconds, optional)</div>
           <input type="number" class="provider-key-input w-full font-mono" min="1" step="1" placeholder="Use global default"
