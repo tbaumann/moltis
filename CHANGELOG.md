@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [20260406.05] - 2026-04-06
+### Added
+- [openclaw-import] Convert non-default agents to spawn_agent presets
+
+
+### Fixed
+- [web] Allow session sidebar links to open in new tabs
+- [web] Tighten session sidebar link accessibility
+- [docker] Add missing default features to Dockerfile build
+- [docker] Use default features instead of explicit list
+
 ## [20260406.04] - 2026-04-06
 ### Added
 - [website] Add provider/channel pills section and update branding
