@@ -2421,7 +2421,9 @@ pub async fn prepare_gateway_core(
             let interval = std::time::Duration::from_secs(60 * 60); // hourly
             loop {
                 tokio::time::sleep(interval).await;
-                let retention_ms = retention_days * 24 * 60 * 60 * 1000;
+                let retention_ms = time::Duration::days(retention_days as i64)
+                    .whole_milliseconds()
+                    .unsigned_abs() as u64;
                 let cutoff_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -2440,8 +2442,9 @@ pub async fn prepare_gateway_core(
                 // Clean up sessions and their sandbox containers.
                 let mut cleaned = 0u64;
                 for key in &session_keys {
-                    // Skip named cron sessions (they are reused).
-                    if !key.starts_with("cron:") {
+                    // Only prune isolated (UUID) sessions; named sessions are reused.
+                    let suffix = key.strip_prefix("cron:").unwrap_or(key.as_str());
+                    if uuid::Uuid::parse_str(suffix).is_err() {
                         continue;
                     }
                     // Clear session file.
