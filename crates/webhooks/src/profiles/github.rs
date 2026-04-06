@@ -136,7 +136,7 @@ impl SourceProfile for GitHubProfile {
             if let Some(body_text) = pr.get("body").and_then(|b| b.as_str()) {
                 if !body_text.is_empty() {
                     let truncated = if body_text.len() > 500 {
-                        format!("{}...", &body_text[..500])
+                        format!("{}...", crate::normalize::truncate_str(body_text, 500))
                     } else {
                         body_text.to_string()
                     };
@@ -187,7 +187,7 @@ impl SourceProfile for GitHubProfile {
             }
             if let Some(body_text) = comment.get("body").and_then(|b| b.as_str()) {
                 let truncated = if body_text.len() > 1000 {
-                    format!("{}...", &body_text[..1000])
+                    format!("{}...", crate::normalize::truncate_str(body_text, 1000))
                 } else {
                     body_text.to_string()
                 };

@@ -2,12 +2,20 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
-use std::sync::RwLock;
+use std::sync::Mutex;
+
+/// Combined state for per-webhook and global sliding windows.
+struct RateLimitState {
+    per_webhook: HashMap<i64, VecDeque<u64>>,
+    global: VecDeque<u64>,
+}
 
 /// Per-webhook sliding-window rate limiter.
+///
+/// Uses a single lock to avoid TOCTOU gaps between the global and
+/// per-webhook checks.
 pub struct WebhookRateLimiter {
-    windows: RwLock<HashMap<i64, VecDeque<u64>>>,
-    global_window: RwLock<VecDeque<u64>>,
+    state: Mutex<RateLimitState>,
     global_max: u32,
 }
 
@@ -15,8 +23,10 @@ impl WebhookRateLimiter {
     /// Create a new rate limiter with a global max requests per minute.
     pub fn new(global_max: u32) -> Self {
         Self {
-            windows: RwLock::new(HashMap::new()),
-            global_window: RwLock::new(VecDeque::new()),
+            state: Mutex::new(RateLimitState {
+                per_webhook: HashMap::new(),
+                global: VecDeque::new(),
+            }),
             global_max,
         }
     }
@@ -34,41 +44,28 @@ impl WebhookRateLimiter {
         let now = Self::now_ms();
         let window_start = now.saturating_sub(60_000);
 
-        // Check global limit
-        {
-            let mut global = self
-                .global_window
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            while global.front().is_some_and(|&t| t < window_start) {
-                global.pop_front();
-            }
-            if global.len() >= self.global_max as usize {
-                return false;
-            }
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Prune and check global limit.
+        while state.global.front().is_some_and(|&t| t < window_start) {
+            state.global.pop_front();
+        }
+        if state.global.len() >= self.global_max as usize {
+            return false;
         }
 
-        // Check per-webhook limit
-        {
-            let mut windows = self.windows.write().unwrap_or_else(|e| e.into_inner());
-            let window = windows.entry(webhook_id).or_default();
-            while window.front().is_some_and(|&t| t < window_start) {
-                window.pop_front();
-            }
-            if window.len() >= per_webhook_max as usize {
-                return false;
-            }
-            window.push_back(now);
+        // Prune and check per-webhook limit.
+        let window = state.per_webhook.entry(webhook_id).or_default();
+        while window.front().is_some_and(|&t| t < window_start) {
+            window.pop_front();
+        }
+        if window.len() >= per_webhook_max as usize {
+            return false;
         }
 
-        // Record in global window
-        {
-            let mut global = self
-                .global_window
-                .write()
-                .unwrap_or_else(|e| e.into_inner());
-            global.push_back(now);
-        }
+        // Record in both windows atomically.
+        window.push_back(now);
+        state.global.push_back(now);
 
         true
     }
@@ -95,5 +92,15 @@ mod tests {
         assert!(!limiter.check(1, 5));
         // Different webhook should still be allowed
         assert!(limiter.check(2, 5));
+    }
+
+    #[test]
+    fn test_global_limit() {
+        let limiter = WebhookRateLimiter::new(3);
+        assert!(limiter.check(1, 10));
+        assert!(limiter.check(2, 10));
+        assert!(limiter.check(3, 10));
+        // 4th request should hit global limit
+        assert!(!limiter.check(4, 10));
     }
 }

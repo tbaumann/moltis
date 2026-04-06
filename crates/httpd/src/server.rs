@@ -1151,6 +1151,19 @@ pub async fn prepare_gateway(
                       body: axum::body::Bytes| {
                     let gw = Arc::clone(&state_for_webhook_ingest);
                     async move {
+                        // Extract remote IP from X-Forwarded-For or X-Real-Ip headers.
+                        let remote_ip = headers
+                            .get("x-forwarded-for")
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|v| v.split(',').next())
+                            .map(|s| s.trim().to_string())
+                            .or_else(|| {
+                                headers
+                                    .get("x-real-ip")
+                                    .and_then(|v| v.to_str().ok())
+                                    .map(|s| s.trim().to_string())
+                            });
+
                         let resp = async {
                         let Some(store) = gw.webhook_store.get() else {
                             return (
@@ -1313,7 +1326,7 @@ pub async fn prepare_gateway(
                             delivery_key,
                             http_method: Some("POST".into()),
                             content_type,
-                            remote_ip: None,
+                            remote_ip: remote_ip.clone(),
                             headers_json,
                             body_size: body.len(),
                             body_blob: Some(body.to_vec()),

@@ -2,6 +2,19 @@
 
 use crate::types::Webhook;
 
+/// Truncate a string to at most `max_bytes` without splitting a UTF-8 codepoint.
+pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Walk backwards from max_bytes to find a char boundary.
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Build the full delivery message injected into the agent chat session.
 pub fn build_delivery_message(
     webhook: &Webhook,

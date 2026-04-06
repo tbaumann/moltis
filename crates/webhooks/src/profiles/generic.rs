@@ -65,7 +65,7 @@ impl SourceProfile for GenericProfile {
         let truncated = if pretty.len() > 8192 {
             format!(
                 "{}\n\n... (truncated, {} bytes total. Use webhook_get_full_payload tool for full body.)",
-                &pretty[..8192],
+                crate::normalize::truncate_str(&pretty, 8192),
                 pretty.len()
             )
         } else {
