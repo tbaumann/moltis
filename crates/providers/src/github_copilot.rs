@@ -234,6 +234,16 @@ fn copilot_auth_from_parts(token: Secret<String>, proxy_ep: Option<&str>) -> Cop
                     is_enterprise: false,
                 };
             }
+            // Reject bare IP addresses (v4/v6) to prevent SSRF against cloud
+            // metadata services, loopback, and RFC-1918 ranges.
+            if ep.parse::<std::net::IpAddr>().is_ok() {
+                warn!(proxy_ep = %ep, "ignoring IP-address proxy-ep, falling back to individual endpoint");
+                return CopilotAuth {
+                    token,
+                    base_url: COPILOT_API_BASE.to_string(),
+                    is_enterprise: false,
+                };
+            }
             debug!(proxy_ep = %ep, "using enterprise proxy endpoint");
             CopilotAuth {
                 token,
@@ -1711,7 +1721,7 @@ mod tests {
 
     #[test]
     fn copilot_auth_from_parts_rejects_malformed_proxy_ep() {
-        // Slashes, @-redirects, colons, and IP-like values with special chars
+        // Slashes, @-redirects, colons, spaces, and bare IP addresses
         // must be rejected to prevent SSRF.
         for bad in &[
             "evil.com/path",
@@ -1719,6 +1729,11 @@ mod tests {
             "host:8080",
             "169.254.169.254/latest",
             "foo bar",
+            // Bare IPs that pass the character allowlist but must be blocked
+            "169.254.169.254",
+            "127.0.0.1",
+            "192.168.1.1",
+            "10.0.0.1",
         ] {
             let auth = copilot_auth_from_parts(Secret::new("tok".into()), Some(bad));
             assert_eq!(auth.base_url, COPILOT_API_BASE, "should reject: {bad}");
