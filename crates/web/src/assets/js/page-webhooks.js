@@ -115,9 +115,9 @@ function WebhooksListPanel() {
           </div>`}
 
       <div class="text-xs text-[var(--muted)]">
-        Test your webhooks with${" "}
-        <a href="https://hoppscotch.io" target="_blank" rel="noopener"
-          class="text-[var(--accent)] underline">Hoppscotch</a> — send POST requests with custom headers and JSON bodies, no signup needed.
+        Test with: <code class="font-mono text-[var(--text)]">curl -sk -X POST -H "Content-Type: application/json" -d '${"'{}'"}'</code> <em>your-endpoint-url</em>.${" "}
+        For a GUI, use the${" "}<a href="https://hoppscotch.io/download" target="_blank" rel="noopener"
+          class="text-[var(--accent)] underline">Hoppscotch desktop app</a>.
       </div>
     </div>
   `;
