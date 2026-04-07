@@ -162,15 +162,30 @@ fn verify_pagerduty_signature(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<()> {
-    // PagerDuty v2 signatures use "v1=HMAC" format
-    verify_hmac_header(
-        config,
-        headers,
-        body,
-        "x-pagerduty-signature",
-        "secret",
-        "v1=",
-    )
+    // PagerDuty sends comma-separated "v1=SIG1,v1=SIG2" during key rotation.
+    let secret = get_config_str(config, "secret")?;
+    let sig_header = get_header_str(headers, "x-pagerduty-signature")?;
+
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).map_err(|e| Error::auth_failed(e.to_string()))?;
+    mac.update(body);
+    let expected = hex::encode(mac.finalize().into_bytes());
+
+    // Check each comma-separated signature entry.
+    let matched = sig_header.split(',').any(|part| {
+        let part = part.trim();
+        if let Some(sig_hex) = part.strip_prefix("v1=") {
+            sig_hex.as_bytes().ct_eq(expected.as_bytes()).into()
+        } else {
+            false
+        }
+    });
+
+    if matched {
+        Ok(())
+    } else {
+        Err(Error::auth_failed("x-pagerduty-signature mismatch"))
+    }
 }
 
 fn verify_sentry_signature(
@@ -342,5 +357,43 @@ mod tests {
             body,
         );
         assert!(result.is_err(), "old timestamp must be rejected");
+    }
+
+    #[test]
+    fn test_pagerduty_single_signature() {
+        let secret = "pd_secret";
+        let body = b"test body";
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        let sig = hex::encode(mac.finalize().into_bytes());
+
+        let config = serde_json::json!({ "secret": secret });
+        let headers = make_headers(&[("x-pagerduty-signature", &format!("v1={sig}"))]);
+        assert!(verify(&AuthMode::PagerdutyV2Signature, Some(&config), &headers, body).is_ok());
+    }
+
+    #[test]
+    fn test_pagerduty_multi_signature_key_rotation() {
+        let secret = "pd_new_secret";
+        let body = b"test body";
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(body);
+        let good_sig = hex::encode(mac.finalize().into_bytes());
+
+        // Simulate key rotation: old sig first, new sig second.
+        let config = serde_json::json!({ "secret": secret });
+        let header_val = format!("v1=0000000000000000000000000000000000000000000000000000000000000000,v1={good_sig}");
+        let headers = make_headers(&[("x-pagerduty-signature", &header_val)]);
+        assert!(
+            verify(&AuthMode::PagerdutyV2Signature, Some(&config), &headers, body).is_ok(),
+            "should accept when any v1 entry matches"
+        );
+    }
+
+    #[test]
+    fn test_pagerduty_bad_signature() {
+        let config = serde_json::json!({ "secret": "real_secret" });
+        let headers = make_headers(&[("x-pagerduty-signature", "v1=0000000000000000000000000000000000000000000000000000000000000000")]);
+        assert!(verify(&AuthMode::PagerdutyV2Signature, Some(&config), &headers, b"body").is_err());
     }
 }

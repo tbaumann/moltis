@@ -1151,18 +1151,24 @@ pub async fn prepare_gateway(
                       body: axum::body::Bytes| {
                     let gw = Arc::clone(&state_for_webhook_ingest);
                     async move {
-                        // Extract remote IP from X-Forwarded-For or X-Real-Ip headers.
-                        let remote_ip = headers
-                            .get("x-forwarded-for")
-                            .and_then(|v| v.to_str().ok())
-                            .and_then(|v| v.split(',').next())
-                            .map(|s| s.trim().to_string())
-                            .or_else(|| {
-                                headers
-                                    .get("x-real-ip")
-                                    .and_then(|v| v.to_str().ok())
-                                    .map(|s| s.trim().to_string())
-                            });
+                        // Extract remote IP. Only trust forwarded headers when
+                        // behind a reverse proxy — otherwise an attacker can
+                        // forge X-Forwarded-For to bypass CIDR allowlists.
+                        let remote_ip = if gw.behind_proxy {
+                            headers
+                                .get("x-forwarded-for")
+                                .and_then(|v| v.to_str().ok())
+                                .and_then(|v| v.split(',').next())
+                                .map(|s| s.trim().to_string())
+                                .or_else(|| {
+                                    headers
+                                        .get("x-real-ip")
+                                        .and_then(|v| v.to_str().ok())
+                                        .map(|s| s.trim().to_string())
+                                })
+                        } else {
+                            None
+                        };
 
                         let resp = async {
                         let Some(store) = gw.webhook_store.get() else {
