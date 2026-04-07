@@ -387,27 +387,27 @@ impl WebhookStore for SqliteWebhookStore {
     }
 
     async fn delete_webhook(&self, id: i64) -> Result<()> {
-        // Explicitly delete children first — ON DELETE CASCADE requires
-        // PRAGMA foreign_keys = ON which is per-connection and may not
-        // be set on every pooled connection.
+        // Transaction prevents partial data loss if a later DELETE fails.
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "DELETE FROM webhook_response_actions WHERE delivery_id IN \
              (SELECT id FROM webhook_deliveries WHERE webhook_id = ?)",
         )
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         sqlx::query("DELETE FROM webhook_deliveries WHERE webhook_id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         let result = sqlx::query("DELETE FROM webhooks WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         if result.rows_affected() == 0 {
             return Err(Error::webhook_not_found(id.to_string()));
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -578,19 +578,19 @@ impl WebhookStore for SqliteWebhookStore {
     }
 
     async fn prune_deliveries_before(&self, before: &str) -> Result<u64> {
-        // Delete child response_actions first (foreign_keys pragma may
-        // not be enabled on every pooled connection).
+        let mut tx = self.pool.begin().await?;
         sqlx::query(
             "DELETE FROM webhook_response_actions WHERE delivery_id IN \
              (SELECT id FROM webhook_deliveries WHERE received_at < ?)",
         )
         .bind(before)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         let result = sqlx::query("DELETE FROM webhook_deliveries WHERE received_at < ?")
             .bind(before)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(result.rows_affected())
     }
 }
