@@ -61,9 +61,28 @@ impl WebhookWorker {
     }
 
     /// Run the worker loop, processing deliveries from the channel.
+    ///
+    /// On startup, drains any deliveries left in `received` or `queued` state
+    /// from a previous run before listening for new work on the channel.
     #[instrument(skip_all, name = "webhook_worker")]
     pub async fn run(mut self) {
         info!("webhook worker started");
+
+        // Crash recovery: re-process deliveries stuck from a previous run.
+        match self.store.list_unprocessed_deliveries().await {
+            Ok(ids) => {
+                if !ids.is_empty() {
+                    info!(count = ids.len(), "re-processing unfinished deliveries from previous run");
+                }
+                for id in ids {
+                    if let Err(e) = self.process_delivery(id).await {
+                        error!(delivery_id = id, error = %e, "failed to reprocess existing delivery");
+                    }
+                }
+            }
+            Err(e) => error!(error = %e, "failed to load unprocessed deliveries at startup"),
+        }
+
         while let Some(delivery_id) = self.rx.recv().await {
             if let Err(e) = self.process_delivery(delivery_id).await {
                 error!(delivery_id, error = %e, "webhook delivery processing failed");
