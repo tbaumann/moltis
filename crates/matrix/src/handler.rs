@@ -1929,8 +1929,11 @@ mod tests {
         assert!(body.strip_prefix('/').is_some());
 
         let body = "/compact some args";
-        let cmd = body.strip_prefix('/').unwrap();
-        assert!(cmd.starts_with("compact"));
+        if let Some(cmd) = body.strip_prefix('/') {
+            assert!(cmd.starts_with("compact"));
+        } else {
+            panic!("expected slash-prefixed command");
+        }
 
         // Not a command
         let body = "hello world";
