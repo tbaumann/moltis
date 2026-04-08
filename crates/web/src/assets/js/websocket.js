@@ -810,7 +810,7 @@ function handleChatError(p, isActive, isChatPage, eventSession) {
 			btn.onclick = function () {
 				btn.disabled = true;
 				btn.textContent = t("errors:chat.continuing", "Continuing...");
-				S.chatInput.value = "continue";
+				S.chatInput.value = t("errors:chat.continueMessage", "Please continue where you left off.");
 				sendChat();
 			};
 			var body = lastCard.querySelector(".error-body");

@@ -1556,6 +1556,7 @@ pub struct ToolsConfig {
     #[serde(default = "default_agent_max_iterations")]
     pub agent_max_iterations: usize,
     /// Maximum auto-continue nudges when the model stops mid-task (0 = disabled). Default 2.
+    /// Only triggers after the model has made at least 3 tool calls in the current run.
     #[serde(default = "default_agent_max_auto_continues")]
     pub agent_max_auto_continues: usize,
     /// Maximum bytes for a single tool result before truncation. Default 50KB.
