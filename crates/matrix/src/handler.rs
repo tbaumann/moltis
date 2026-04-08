@@ -391,7 +391,8 @@ pub async fn handle_room_message(
         if matches!(kind, ChannelMessageKind::Text)
             && let Some(cmd_text) = body.strip_prefix('/')
         {
-            let response = if cmd_text.starts_with("help") {
+            let cmd_name = cmd_text.split_whitespace().next().unwrap_or("");
+            let response = if cmd_name == "help" {
                 Ok(HELP_TEXT.to_string())
             } else {
                 sink.dispatch_command(cmd_text, reply_to).await
