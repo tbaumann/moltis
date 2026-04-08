@@ -3235,7 +3235,9 @@ mod tests {
     #[test]
     fn tls_runtime_sans_wildcard_bind_uses_resolved_outbound_ip_when_available() {
         let sans = tls_runtime_sans("0.0.0.0");
-        if let Some(ip) = resolve_outbound_ip(false) {
+        if let Some(ip) =
+            resolve_outbound_ip(false).filter(|ip| !ip.is_loopback() && !ip.is_unspecified())
+        {
             assert_eq!(sans, vec![moltis_tls::ServerSan::Ip(ip)]);
         } else {
             assert!(sans.is_empty());
