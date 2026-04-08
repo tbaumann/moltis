@@ -226,11 +226,13 @@ fn parse_models_payload(value: &serde_json::Value) -> Vec<crate::DiscoveredModel
         }
     }
 
+    models
+}
+
+fn mark_recommended_models(models: &mut [crate::DiscoveredModel]) {
     for model in models.iter_mut().take(3) {
         model.recommended = true;
     }
-
-    models
 }
 
 fn models_endpoint(base_url: &str) -> String {
@@ -300,6 +302,8 @@ pub async fn fetch_models_from_api(
         }
         after_id = Some(next_after_id);
     }
+
+    mark_recommended_models(&mut models);
 
     if models.is_empty() {
         anyhow::bail!("anthropic models API returned no models");
@@ -1201,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_models_payload_marks_first_three_as_recommended() {
+    fn parse_models_payload_does_not_mark_recommendations() {
         let payload = serde_json::json!({
             "data": [
                 {"id": "claude-opus-4-6", "display_name": "Claude Opus 4.6", "type": "model"},
@@ -1213,6 +1217,23 @@ mod tests {
 
         let models = parse_models_payload(&payload);
         assert_eq!(models.len(), 4);
+        assert!(!models[0].recommended);
+        assert!(!models[1].recommended);
+        assert!(!models[2].recommended);
+        assert!(!models[3].recommended);
+    }
+
+    #[test]
+    fn mark_recommended_models_marks_first_three_globally() {
+        let mut models = vec![
+            crate::DiscoveredModel::new("claude-opus-4-6", "Claude Opus 4.6"),
+            crate::DiscoveredModel::new("claude-sonnet-4-6", "Claude Sonnet 4.6"),
+            crate::DiscoveredModel::new("claude-haiku-4-5", "Claude Haiku 4.5"),
+            crate::DiscoveredModel::new("claude-3-7-sonnet-20250219", "Claude 3.7 Sonnet"),
+        ];
+
+        mark_recommended_models(&mut models);
+
         assert!(models[0].recommended);
         assert!(models[1].recommended);
         assert!(models[2].recommended);
