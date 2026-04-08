@@ -748,7 +748,7 @@ impl ChannelThreadContext for MsTeamsPlugin {
         _thread_id: &str,
         limit: usize,
     ) -> ChannelResult<Vec<ThreadMessage>> {
-        let (http, config, token_cache) = {
+        let (http, config, graph_cache) = {
             let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
             let state = accounts
                 .get(account_id)
@@ -756,15 +756,13 @@ impl ChannelThreadContext for MsTeamsPlugin {
             (
                 state.http.clone(),
                 state.config.clone(),
-                Arc::clone(&state.token_cache),
+                Arc::clone(&state.graph_token_cache),
             )
         };
 
-        // Graph API requires a separate token; we reuse the bot token which
-        // may or may not have Graph permissions depending on the app registration.
-        let token = get_access_token(&http, &config, &token_cache)
+        let token = crate::auth::get_graph_token(&http, &config, &graph_cache)
             .await
-            .map_err(|e| ChannelError::unavailable(format!("Teams token for Graph: {e}")))?;
+            .map_err(|e| ChannelError::unavailable(format!("Teams Graph token: {e}")))?;
 
         let effective_limit = if limit == 0 {
             config.history_limit

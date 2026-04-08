@@ -608,7 +608,7 @@ impl ChannelOutbound for MsTeamsOutbound {
         message_id: &str,
         emoji: &str,
     ) -> ChannelResult<()> {
-        let (http, config, token_cache) = {
+        let (http, config, graph_cache) = {
             let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
             let state = accounts
                 .get(account_id)
@@ -616,13 +616,13 @@ impl ChannelOutbound for MsTeamsOutbound {
             (
                 state.http.clone(),
                 state.config.clone(),
-                std::sync::Arc::clone(&state.token_cache),
+                std::sync::Arc::clone(&state.graph_token_cache),
             )
         };
 
-        let token = get_access_token(&http, &config, &token_cache)
+        let token = crate::auth::get_graph_token(&http, &config, &graph_cache)
             .await
-            .map_err(|e| ChannelError::unavailable(format!("Teams token: {e}")))?;
+            .map_err(|e| ChannelError::unavailable(format!("Teams Graph token: {e}")))?;
 
         crate::graph::add_reaction(&http, &token, channel_id, message_id, emoji)
             .await
@@ -638,7 +638,7 @@ impl ChannelOutbound for MsTeamsOutbound {
         message_id: &str,
         emoji: &str,
     ) -> ChannelResult<()> {
-        let (http, config, token_cache) = {
+        let (http, config, graph_cache) = {
             let accounts = self.accounts.read().unwrap_or_else(|e| e.into_inner());
             let state = accounts
                 .get(account_id)
@@ -646,13 +646,13 @@ impl ChannelOutbound for MsTeamsOutbound {
             (
                 state.http.clone(),
                 state.config.clone(),
-                std::sync::Arc::clone(&state.token_cache),
+                std::sync::Arc::clone(&state.graph_token_cache),
             )
         };
 
-        let token = get_access_token(&http, &config, &token_cache)
+        let token = crate::auth::get_graph_token(&http, &config, &graph_cache)
             .await
-            .map_err(|e| ChannelError::unavailable(format!("Teams token: {e}")))?;
+            .map_err(|e| ChannelError::unavailable(format!("Teams Graph token: {e}")))?;
 
         crate::graph::remove_reaction(&http, &token, channel_id, message_id, emoji)
             .await
