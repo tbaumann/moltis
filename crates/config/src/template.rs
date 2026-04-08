@@ -226,6 +226,7 @@ message_queue_mode = "followup"   # Default: process queued messages one-by-one 
 [tools]
 agent_timeout_secs = 600          # Max seconds for an agent run (0 = no timeout)
 agent_max_iterations = 25         # Max LLM/tool loop iterations before stopping
+agent_max_auto_continues = 2     # Max auto-continue nudges when model stops mid-task (0 = disabled)
 max_tool_result_bytes = 50000     # Max bytes per tool result before truncation (50KB)
 # registry_mode = "full"          # "full" = all schemas every turn, "lazy" = tool_search discovery
 
