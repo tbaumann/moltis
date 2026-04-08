@@ -550,7 +550,7 @@ mod tests {
         super::*,
         moltis_agents::model::{ChatMessage, CompletionResponse, StreamEvent, Usage},
         moltis_config::schema::{AgentIdentity, PresetToolPolicy},
-        std::pin::Pin,
+        std::{pin::Pin, sync::Mutex},
         tokio_stream::Stream,
     };
 
@@ -558,6 +558,22 @@ mod tests {
     struct MockProvider {
         response: String,
         model_id: String,
+        seen_tool_names: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MockProvider {
+        fn with_capture(
+            response: impl Into<String>,
+            model_id: impl Into<String>,
+        ) -> (Arc<dyn LlmProvider>, Arc<Mutex<Vec<String>>>) {
+            let seen_tool_names = Arc::new(Mutex::new(Vec::new()));
+            let provider: Arc<dyn LlmProvider> = Arc::new(Self {
+                response: response.into(),
+                model_id: model_id.into(),
+                seen_tool_names: Arc::clone(&seen_tool_names),
+            });
+            (provider, seen_tool_names)
+        }
     }
 
     #[async_trait]
@@ -573,8 +589,17 @@ mod tests {
         async fn complete(
             &self,
             _messages: &[ChatMessage],
-            _tools: &[serde_json::Value],
+            tools: &[serde_json::Value],
         ) -> anyhow::Result<CompletionResponse> {
+            let tool_names = tools
+                .iter()
+                .filter_map(|tool| {
+                    tool.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect();
+            *self.seen_tool_names.lock().unwrap() = tool_names;
             Ok(CompletionResponse {
                 text: Some(self.response.clone()),
                 tool_calls: vec![],
@@ -591,6 +616,10 @@ mod tests {
             _messages: Vec<ChatMessage>,
         ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send + '_>> {
             Box::pin(tokio_stream::empty())
+        }
+
+        fn supports_tools(&self) -> bool {
+            true
         }
     }
 
@@ -650,10 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sub_agent_runs_and_returns_result() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "Sub-agent result".into(),
-            model_id: "mock-model".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("Sub-agent result", "mock-model");
         let tool_registry = Arc::new(ToolRegistry::new());
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
@@ -672,10 +698,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_depth_limit_rejects() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "nope".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("nope", "mock");
         let tool_registry = Arc::new(ToolRegistry::new());
         let spawn_tool =
             SpawnAgentTool::new(make_empty_provider_registry(), provider, tool_registry);
@@ -691,10 +714,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn_agent_excluded_from_sub_registry() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "ok".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("ok", "mock");
 
         // Create a registry with spawn_agent in it.
         let mut registry = ToolRegistry::new();
@@ -766,10 +786,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_context_passed_to_sub_agent() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "done with context".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("done with context", "mock");
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
             provider,
@@ -786,14 +803,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_null_optional_array_params_are_treated_as_absent() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "done".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, seen_tool_names) = MockProvider::with_capture("done", "mock");
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
             provider,
-            Arc::new(ToolRegistry::new()),
+            registry_with_tools(&["spawn_agent", "exec", "web_fetch", "task_list"]),
         );
 
         let params = serde_json::json!({
@@ -807,14 +821,18 @@ mod tests {
         });
         let result = spawn_tool.execute(params).await.unwrap();
         assert_eq!(result["text"], "done");
+        let mut seen = seen_tool_names.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(seen, vec![
+            "exec".to_string(),
+            "task_list".to_string(),
+            "web_fetch".to_string(),
+        ]);
     }
 
     #[tokio::test]
     async fn test_missing_task_parameter() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "nope".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("nope", "mock");
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
             provider,
@@ -828,10 +846,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_sub_tools_applies_allow_and_deny() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "ok".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("ok", "mock");
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
             provider,
@@ -855,10 +870,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_build_sub_tools_delegate_only_uses_delegate_set() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "ok".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("ok", "mock");
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
             provider,
@@ -883,10 +895,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_preset_uses_explicit_name() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "ok".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("ok", "mock");
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
             provider,
@@ -910,10 +919,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_preset_uses_default_when_missing() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "ok".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("ok", "mock");
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
             provider,
@@ -946,10 +952,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_preset_errors_when_name_missing() {
-        let provider: Arc<dyn LlmProvider> = Arc::new(MockProvider {
-            response: "ok".into(),
-            model_id: "mock".into(),
-        });
+        let (provider, _) = MockProvider::with_capture("ok", "mock");
         let spawn_tool = SpawnAgentTool::new(
             make_empty_provider_registry(),
             provider,

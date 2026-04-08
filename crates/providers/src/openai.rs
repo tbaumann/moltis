@@ -2169,6 +2169,7 @@ mod tests {
         let body = reqs[0].body.as_ref().expect("request should have a body");
         assert_eq!(body["max_tokens"], 1);
         assert!(body.get("max_completion_tokens").is_none());
+        assert!(body.get("system").is_none());
     }
 
     #[tokio::test]
