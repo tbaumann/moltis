@@ -866,9 +866,17 @@ impl LlmProvider for AnthropicProvider {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
-    use axum::{Router, extract::Request, routing::post};
+    use axum::{
+        Json, Router,
+        extract::{Query, Request},
+        http::StatusCode,
+        routing::{get, post},
+    };
 
     use super::*;
 
@@ -907,6 +915,40 @@ mod tests {
         });
 
         (format!("http://{addr}"), captured)
+    }
+
+    async fn start_models_mock(
+        responses: Arc<Mutex<HashMap<Option<String>, (StatusCode, serde_json::Value)>>>,
+    ) -> String {
+        let app = Router::new().route(
+            ANTHROPIC_MODELS_ENDPOINT_PATH,
+            get(move |Query(params): Query<HashMap<String, String>>| {
+                let responses = responses.clone();
+                async move {
+                    let key = params.get("after_id").cloned();
+                    let (status, body) = responses
+                        .lock()
+                        .expect("lock responses")
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            (
+                                StatusCode::NOT_FOUND,
+                                serde_json::json!({ "error": "missing test response" }),
+                            )
+                        });
+                    (status, Json(body))
+                }
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        format!("http://{addr}")
     }
 
     #[test]
@@ -1029,6 +1071,127 @@ mod tests {
         assert_eq!(reqs.len(), 1);
         let body = reqs[0].body.as_ref().expect("request should have a body");
         assert_eq!(body["max_tokens"], 1);
+    }
+
+    #[tokio::test]
+    async fn fetch_models_from_api_paginates_deduplicates_and_marks_first_three_once() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            None,
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "data": [
+                        {"id": "claude-opus-4-6", "display_name": "Claude Opus 4.6", "type": "model"},
+                        {"id": "claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6", "type": "model"},
+                        {"id": "claude-haiku-4-5", "display_name": "Claude Haiku 4.5", "type": "model"}
+                    ],
+                    "has_more": true,
+                    "last_id": "cursor-1"
+                }),
+            ),
+        );
+        responses.insert(
+            Some("cursor-1".to_string()),
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "data": [
+                        {"id": "claude-haiku-4-5", "display_name": "Claude Haiku 4.5", "type": "model"},
+                        {"id": "claude-3-7-sonnet-20250219", "display_name": "Claude 3.7 Sonnet", "type": "model"}
+                    ],
+                    "has_more": false,
+                    "last_id": "cursor-2"
+                }),
+            ),
+        );
+        let base_url = start_models_mock(Arc::new(Mutex::new(responses))).await;
+
+        let models = fetch_models_from_api(secrecy::Secret::new("test-key".into()), base_url)
+            .await
+            .expect("model discovery should succeed");
+
+        let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, vec![
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+            "claude-3-7-sonnet-20250219",
+        ]);
+        assert!(models[0].recommended);
+        assert!(models[1].recommended);
+        assert!(models[2].recommended);
+        assert!(!models[3].recommended);
+    }
+
+    #[tokio::test]
+    async fn fetch_models_from_api_ignores_non_chat_entries() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            None,
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "data": [
+                        {"id": "claude-sonnet-4-6", "display_name": "Claude Sonnet 4.6", "type": "model"},
+                        {"id": "claude-embeddings-v1", "display_name": "Claude Embeddings", "type": "model"},
+                        {"id": "claude-opus-4-6", "display_name": "Claude Opus 4.6", "type": "model"}
+                    ],
+                    "has_more": false
+                }),
+            ),
+        );
+        let base_url = start_models_mock(Arc::new(Mutex::new(responses))).await;
+
+        let models = fetch_models_from_api(secrecy::Secret::new("test-key".into()), base_url)
+            .await
+            .expect("model discovery should succeed");
+
+        let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, vec!["claude-sonnet-4-6", "claude-opus-4-6"]);
+    }
+
+    #[tokio::test]
+    async fn fetch_models_from_api_errors_on_http_failure() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            None,
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                serde_json::json!({ "error": { "message": "rate limited" } }),
+            ),
+        );
+        let base_url = start_models_mock(Arc::new(Mutex::new(responses))).await;
+
+        let err = fetch_models_from_api(secrecy::Secret::new("test-key".into()), base_url)
+            .await
+            .expect_err("HTTP failure should surface as an error");
+
+        assert!(err.to_string().contains("HTTP 429"));
+    }
+
+    #[tokio::test]
+    async fn fetch_models_from_api_errors_when_no_chat_models_are_returned() {
+        let mut responses = HashMap::new();
+        responses.insert(
+            None,
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "data": [
+                        {"id": "claude-embeddings-v1", "display_name": "Claude Embeddings", "type": "model"}
+                    ],
+                    "has_more": false
+                }),
+            ),
+        );
+        let base_url = start_models_mock(Arc::new(Mutex::new(responses))).await;
+
+        let err = fetch_models_from_api(secrecy::Secret::new("test-key".into()), base_url)
+            .await
+            .expect_err("empty chat-capable catalog should error");
+
+        assert!(err.to_string().contains("returned no models"));
     }
 
     #[test]

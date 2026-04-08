@@ -959,6 +959,8 @@ pub fn is_chat_capable_model(model_id: &str) -> bool {
         "tts-",
         "whisper",
         "text-embedding",
+        "claude-embedding",
+        "claude-embeddings",
         "omni-moderation",
         "moderation-",
         "sora",
@@ -1011,6 +1013,8 @@ pub fn supports_tools_for_model(model_id: &str) -> bool {
         || id.starts_with("tts-")
         || id.starts_with("whisper")
         || id.starts_with("text-embedding")
+        || id.starts_with("claude-embedding")
+        || id.starts_with("claude-embeddings")
         || id.starts_with("omni-moderation")
     {
         return false;
@@ -3389,6 +3393,7 @@ mod tests {
         assert!(!is_chat_capable_model("gpt-4o-realtime-preview"));
         assert!(!is_chat_capable_model("gpt-4o-mini-transcribe"));
         assert!(!is_chat_capable_model("sora"));
+        assert!(!is_chat_capable_model("claude-embeddings-v1"));
 
         // Google Gemini non-chat models
         assert!(!is_chat_capable_model("imagen-3.0-generate-002"));
@@ -3455,6 +3460,7 @@ mod tests {
         assert!(!supports_tools_for_model("tts-1-hd"));
         assert!(!supports_tools_for_model("whisper-1"));
         assert!(!supports_tools_for_model("text-embedding-3-large"));
+        assert!(!supports_tools_for_model("claude-embeddings-v1"));
         assert!(!supports_tools_for_model("omni-moderation-latest"));
         assert!(!supports_tools_for_model(
             "custom-openrouter::openai/text-embedding-3-large"
