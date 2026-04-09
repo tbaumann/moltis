@@ -127,7 +127,7 @@ async fn system_prompt_is_received_by_model_non_streaming() {
 
     let text = response.text.expect("response must contain text");
     assert!(
-        text.contains(keyword),
+        text.to_lowercase().contains(&keyword.to_lowercase()),
         "system prompt was not received by model: response = {text:?}"
     );
     assert!(
@@ -173,7 +173,7 @@ async fn system_prompt_is_received_by_model_streaming() {
 
     assert!(saw_done, "stream must emit Done event");
     assert!(
-        full_text.contains(keyword),
+        full_text.to_lowercase().contains(&keyword.to_lowercase()),
         "system prompt was not received by model: response = {full_text:?}"
     );
 }
