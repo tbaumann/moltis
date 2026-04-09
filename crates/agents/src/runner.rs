@@ -1156,7 +1156,7 @@ pub async fn run_agent_loop_with_context(
                     messages.push(ChatMessage::assistant(&response_text));
                 }
                 messages.push(ChatMessage::user(
-                    "Continue with the task. If you've completed it, summarize your results.",
+                    "Your previous response ended without tool calls. If the task is complete, provide a brief final answer. Otherwise continue executing.",
                 ));
                 continue;
             }
@@ -1857,7 +1857,7 @@ pub async fn run_agent_loop_streaming(
                     messages.push(ChatMessage::assistant(&accumulated_text));
                 }
                 messages.push(ChatMessage::user(
-                    "Continue with the task. If you've completed it, summarize your results.",
+                    "Your previous response ended without tool calls. If the task is complete, provide a brief final answer. Otherwise continue executing.",
                 ));
                 continue;
             }
