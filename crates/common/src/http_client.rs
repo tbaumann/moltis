@@ -10,20 +10,18 @@
 
 use reqwest::header::{HeaderMap, HeaderValue, USER_AGENT};
 
+const FALLBACK_USER_AGENT: &str = "Moltis/unknown";
+
 static UPSTREAM_PROXY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Default User-Agent header value for outgoing HTTP requests.
 ///
-/// Returns `"Moltis/<version>"` where `<version>` is the `moltis-common` crate
-/// version (currently `0.1.0`). This matches the pattern already used by
-/// other crates in this workspace (e.g., `moltis/1.0` in `local_gguf`,
-/// `moltis/0.3` in `tools`).
-///
-/// Some providers (e.g., Alibaba Cloud Coding Plan) reject requests that
-/// lack a non-empty `User-Agent`, so this is set as a default on all
-/// clients built via [`build_http_client`].
-pub fn default_user_agent() -> &'static str {
-    concat!("Moltis/", env!("CARGO_PKG_VERSION"))
+/// Returns `"Moltis/<version>"` where `<version>` is sourced from
+/// `MOLTIS_VERSION` (when injected at compile time by CI) and otherwise
+/// falls back to `CARGO_PKG_VERSION` for local development builds.
+pub fn default_user_agent() -> String {
+    let version = option_env!("MOLTIS_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"));
+    format!("Moltis/{version}")
 }
 
 /// Build the default header map applied to all requests.
@@ -34,7 +32,19 @@ pub fn default_user_agent() -> &'static str {
 /// already contain the same key.
 pub fn build_default_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static(default_user_agent()));
+    match HeaderValue::from_str(&default_user_agent()) {
+        Ok(ua) => {
+            headers.insert(USER_AGENT, ua);
+        },
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                fallback = FALLBACK_USER_AGENT,
+                "failed to build default User-Agent header; using fallback"
+            );
+            headers.insert(USER_AGENT, HeaderValue::from_static(FALLBACK_USER_AGENT));
+        },
+    }
     headers
 }
 
@@ -91,6 +101,9 @@ pub fn build_default_http_client() -> reqwest::Client {
 /// Useful when callers need additional builder options (timeout, redirect
 /// policy, etc.) but still want the global proxy applied.
 pub fn apply_proxy(mut builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    // Keep header behavior consistent with `build_http_client`.
+    builder = builder.default_headers(build_default_headers());
+
     if let Some(url) = upstream_proxy_url()
         && let Ok(proxy) = reqwest::Proxy::all(url)
     {
