@@ -1378,7 +1378,7 @@ pub const KNOWN_CHANNEL_TYPES: &[&str] = &[
 #[serde(default)]
 pub struct ChannelsConfig {
     /// Which channel types are offered in the web UI (onboarding + channels page).
-    /// Defaults to `["telegram", "discord", "slack", "matrix"]`. Add `"msteams"` or `"whatsapp"` to opt in.
+    /// Defaults to `["telegram", "msteams", "discord", "slack", "matrix"]`. Add `"whatsapp"` to opt in.
     #[serde(
         default = "default_channels_offered",
         skip_serializing_if = "Vec::is_empty"
@@ -1436,6 +1436,7 @@ impl ChannelsConfig {
 fn default_channels_offered() -> Vec<String> {
     vec![
         "telegram".into(),
+        "msteams".into(),
         "discord".into(),
         "slack".into(),
         "matrix".into(),
@@ -2798,10 +2799,11 @@ deny = ["exec"]
     }
 
     #[test]
-    fn channels_config_defaults_to_telegram_discord_slack_matrix_offered() {
+    fn channels_config_defaults_offered() {
         let config = ChannelsConfig::default();
         assert_eq!(config.offered, vec![
             "telegram".to_string(),
+            "msteams".to_string(),
             "discord".to_string(),
             "slack".to_string(),
             "matrix".to_string(),
@@ -2813,6 +2815,7 @@ deny = ["exec"]
         let config: ChannelsConfig = toml::from_str("").unwrap();
         assert_eq!(config.offered, vec![
             "telegram".to_string(),
+            "msteams".to_string(),
             "discord".to_string(),
             "slack".to_string(),
             "matrix".to_string(),

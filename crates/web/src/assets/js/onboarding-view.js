@@ -2792,6 +2792,7 @@ function TeamsForm({ onConnected, error, setError }) {
 	var [advancedConfig, setAdvancedConfig] = useState("");
 	var [saving, setSaving] = useState(false);
 
+	// Auto-detect public URL from ngrok or Tailscale Funnel.
 	useEffect(() => {
 		var cancelled = false;
 		var currentDefault = defaultTeamsBaseUrl();
@@ -2876,40 +2877,63 @@ function TeamsForm({ onConnected, error, setError }) {
 		});
 	}
 
+	var isLocalUrl =
+		!baseUrl ||
+		/^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\])/i.test(baseUrl) ||
+		baseUrl === defaultTeamsBaseUrl();
+
 	return html`<form onSubmit=${onSubmit} class="flex flex-col gap-3">
-		<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)] flex flex-col gap-1">
-			<span class="font-medium text-[var(--text-strong)]">Microsoft Teams setup</span>
-			<span>1. <a href="https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-registration" target="_blank" class="text-[var(--accent)] underline">Create an Azure Bot registration</a> and copy the App ID + App Password.</span>
-			<span>2. Generate the messaging endpoint below and paste it into your Azure Bot configuration.</span>
-			<span>3. Optional CLI shortcut: <code class="text-xs">moltis channels teams bootstrap</code>.</span>
+		${
+			isLocalUrl &&
+			html`<div class="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs flex flex-col gap-1">
+			<span class="font-medium text-[var(--text-strong)]">Public URL required</span>
+			<span class="text-[var(--muted)]">Teams sends messages via webhook \u2014 your server must be reachable over HTTPS. Set up a tunnel in the previous <strong>Remote Access</strong> step, or enter a public URL below.</span>
+		</div>`
+		}
+		<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-3 text-xs text-[var(--muted)] flex flex-col gap-2">
+			<span class="font-medium text-[var(--text-strong)]">How to create a Teams bot</span>
+			<span class="font-medium text-[var(--text-strong)] text-[10px] opacity-70">Option A: Teams Developer Portal (easiest)</span>
+			<span>1. Open <a href="https://dev.teams.microsoft.com/bots" target="_blank" class="text-[var(--accent)] underline">Teams Developer Portal \u2192 Bot Management</a></span>
+			<span>2. Click <strong>+ New Bot</strong>, give it a name, and click <strong>Add</strong></span>
+			<span>3. Go to <strong>Configure</strong> \u2014 copy the <strong>Bot ID</strong> (this is your App ID)</span>
+			<span>4. Under <strong>Client secrets</strong>, click <strong>Add a client secret</strong> and copy the value</span>
+			<span class="font-medium text-[var(--text-strong)] text-[10px] opacity-70 mt-1">Option B: Azure Portal</span>
+			<span>1. Go to <a href="https://portal.azure.com/#create/Microsoft.AzureBot" target="_blank" class="text-[var(--accent)] underline">Azure Portal \u2192 Create Azure Bot</a></span>
+			<span>2. Create the bot, then go to <strong>Configuration</strong> to find the App ID</span>
+			<span>3. Click <strong>Manage Password</strong> \u2192 <strong>New client secret</strong> to get the App Password</span>
+			<span class="mt-1">After creating the bot, generate the endpoint below and paste it as the <strong>Messaging endpoint</strong> in your bot settings.</span>
 		</div>
 		<div>
-			<label class="text-xs text-[var(--muted)] mb-1 block">App ID / Account ID</label>
+			<label class="text-xs text-[var(--muted)] mb-1 block">App ID (Bot ID from Azure)</label>
 			<input type="text" class="provider-key-input w-full"
 				value=${appId} onInput=${(e) => setAppId(e.target.value)}
-				placeholder="Azure App ID or alias"
+				placeholder="e.g. 12345678-abcd-efgh-ijkl-000000000000"
 				autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
 				name="teams_app_id" autofocus />
 		</div>
 		<div>
-			<label class="text-xs text-[var(--muted)] mb-1 block">App Password (client secret)</label>
+			<label class="text-xs text-[var(--muted)] mb-1 block">App Password (client secret from Azure)</label>
 			<input type="password" class="provider-key-input w-full"
 				value=${appPassword} onInput=${(e) => setAppPassword(e.target.value)}
-				placeholder="Azure client secret"
+				placeholder="Client secret value"
 				autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false"
 				name="teams_app_password" />
 		</div>
 		<div>
-			<label class="text-xs text-[var(--muted)] mb-1 block">Webhook Secret (optional)</label>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Webhook Secret <span class="opacity-60">(optional \u2014 auto-generated if blank)</span></label>
 			<input type="text" class="provider-key-input w-full"
 				value=${webhookSecret} onInput=${(e) => setWebhookSecret(e.target.value)}
-				placeholder="shared secret for ?secret=..." />
+				placeholder="Leave blank to auto-generate" />
 		</div>
 		<div>
-			<label class="text-xs text-[var(--muted)] mb-1 block">Public Base URL</label>
+			<label class="text-xs text-[var(--muted)] mb-1 block">Public Base URL <span class="opacity-60">(your server\u2019s HTTPS address)</span></label>
 			<input type="text" class="provider-key-input w-full"
 				value=${baseUrl} onInput=${(e) => setBaseUrl(e.target.value)}
 				placeholder="https://bot.example.com" />
+			${
+				isLocalUrl &&
+				html`<div class="text-[10px] text-amber-600 mt-1">This looks like a local address. Teams webhooks need a publicly reachable HTTPS URL.</div>`
+			}
 		</div>
 		<div class="flex gap-2">
 			<button type="button" class="provider-btn provider-btn-sm provider-btn-secondary" onClick=${onBootstrap}>Generate Endpoint</button>
@@ -2917,9 +2941,9 @@ function TeamsForm({ onConnected, error, setError }) {
 		</div>
 		${
 			bootstrapEndpoint &&
-			html`<div>
-			<div class="text-xs text-[var(--muted)]">Messaging endpoint</div>
-			<code class="text-xs block break-all">${bootstrapEndpoint}</code>
+			html`<div class="rounded-md border border-[var(--border)] bg-[var(--surface2)] p-2">
+			<div class="text-xs text-[var(--muted)] mb-1">Messaging endpoint \u2014 paste this into your bot\u2019s configuration:</div>
+			<code class="text-xs block break-all select-all">${bootstrapEndpoint}</code>
 		</div>`
 		}
 		<${AdvancedConfigPatchField} value=${advancedConfig} onInput=${setAdvancedConfig} />

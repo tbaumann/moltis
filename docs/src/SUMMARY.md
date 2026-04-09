@@ -31,6 +31,7 @@
 - [Voice](voice.md)
 - [Channels](channels.md)
   - [Telegram](telegram.md)
+  - [Microsoft Teams](teams.md)
   - [Discord](discord.md)
   - [Slack](slack.md)
   - [Matrix](matrix.md)
