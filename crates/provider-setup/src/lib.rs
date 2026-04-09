@@ -732,17 +732,20 @@ pub struct KnownProvider {
     /// Whether the API key is optional (e.g. Ollama and LM Studio run locally
     /// without auth).
     pub key_optional: bool,
+    /// Whether this provider only runs locally (binds to localhost) and should
+    /// be hidden from cloud deployments. Separate from `key_optional` because a
+    /// remote provider could legitimately support unauthenticated access without
+    /// binding to localhost.
+    pub local_only: bool,
 }
 
 impl KnownProvider {
     /// Returns true if this provider is local-only — runs on the user's
     /// machine and isn't reachable from cloud deployments. Used by cloud-mode
-    /// filters to hide providers that bind to localhost. Replaces the old
-    /// `auth_type == Local || name == "ollama"` string-based check, which
-    /// missed every new local OpenAI-compatible provider added after Ollama.
+    /// filters to hide providers that bind to localhost.
     #[must_use]
     pub fn is_local_only(&self) -> bool {
-        self.auth_type == AuthType::Local || self.key_optional
+        self.auth_type == AuthType::Local || self.local_only
     }
 }
 
@@ -757,6 +760,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.anthropic.com"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "openai",
@@ -766,6 +770,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.openai.com/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "gemini",
@@ -775,6 +780,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://generativelanguage.googleapis.com/v1beta/openai"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "groq",
@@ -784,6 +790,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.groq.com/openai/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "xai",
@@ -793,6 +800,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.x.ai/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "deepseek",
@@ -802,6 +810,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.deepseek.com"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "fireworks",
@@ -811,6 +820,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.fireworks.ai/inference/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "mistral",
@@ -820,6 +830,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.mistral.ai/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "openrouter",
@@ -829,6 +840,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://openrouter.ai/api/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "cerebras",
@@ -838,6 +850,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.cerebras.ai/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "minimax",
@@ -847,6 +860,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.minimax.io/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "moonshot",
@@ -856,6 +870,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.moonshot.cn/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "zai",
@@ -865,6 +880,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.z.ai/api/paas/v4"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "zai-code",
@@ -874,6 +890,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.z.ai/api/coding/paas/v4"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "venice",
@@ -883,6 +900,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.venice.ai/api/v1"),
             requires_model: true,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "ollama",
@@ -892,6 +910,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("http://localhost:11434"),
             requires_model: false,
             key_optional: true,
+            local_only: true,
         },
         KnownProvider {
             name: "lmstudio",
@@ -901,6 +920,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("http://127.0.0.1:1234/v1"),
             requires_model: false,
             key_optional: true,
+            local_only: true,
         },
         KnownProvider {
             name: "openai-codex",
@@ -910,6 +930,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: None,
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "github-copilot",
@@ -919,6 +940,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: None,
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
         KnownProvider {
             name: "kimi-code",
@@ -928,6 +950,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: Some("https://api.kimi.com/coding/v1"),
             requires_model: false,
             key_optional: false,
+            local_only: false,
         },
     ];
 
@@ -943,6 +966,7 @@ pub fn known_providers() -> Vec<KnownProvider> {
             default_base_url: None,
             requires_model: true,
             key_optional: false,
+            local_only: true,
         });
         p
     };
@@ -2290,6 +2314,7 @@ impl ProviderSetupService for LiveProviderSetupService {
                 default_base_url: info.default_base_url,
                 requires_model: info.requires_model,
                 key_optional: info.key_optional,
+                local_only: info.local_only,
             })
         };
 
@@ -4101,11 +4126,13 @@ mod tests {
     }
 
     #[test]
-    fn is_local_only_matches_legacy_name_check() {
+    fn is_local_only_is_superset_of_legacy_check() {
         // Regression: before the typed `is_local_only()` helper, cloud-mode
         // filters used `auth_type == Local || name == "ollama"`. Confirm the
-        // typed method covers exactly the same set of providers (plus any new
-        // ones marked key_optional or auth_type::Local going forward).
+        // typed method is a superset of that legacy set — every provider the
+        // old check flagged must still be flagged. The new method intentionally
+        // also catches providers like `lmstudio` that the old string check
+        // missed, so `typed == true && legacy == false` is expected.
         for p in known_providers() {
             let legacy = p.auth_type == AuthType::Local || p.name == "ollama";
             let typed = p.is_local_only();
