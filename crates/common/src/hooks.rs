@@ -881,6 +881,7 @@ mod tests {
             session_key: "test".into(),
             content: "hello".into(),
             channel: Some("telegram".into()),
+            channel_binding: None,
         };
         let result = registry.dispatch(&payload).await.unwrap();
         match result {
@@ -923,6 +924,7 @@ mod tests {
             session_key: "test".into(),
             content: "original".into(),
             channel: None,
+            channel_binding: None,
         };
         let result = registry.dispatch(&payload).await.unwrap();
         match result {
