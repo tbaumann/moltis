@@ -5,7 +5,10 @@
 //! authorization-server-compatible URIs regardless of the scheme the
 //! browser started on.
 
-use url::{Host, Url};
+use {
+    tracing::debug,
+    url::{Host, Url},
+};
 
 /// Rewrite `https://` → `http://` for loopback redirect URIs.
 ///
@@ -51,7 +54,13 @@ pub fn normalize_loopback_redirect(uri: &str) -> String {
     // non-"special" schemes; `https`→`http` are both special and share
     // the same structure, so this never fails in practice.
     let _ = parsed.set_scheme("http");
-    parsed.to_string()
+    let normalized = parsed.to_string();
+    debug!(
+        original = %uri,
+        normalized = %normalized,
+        "rewrote loopback OAuth redirect URI from https to http (RFC 8252 §7.3/§8.3)"
+    );
+    normalized
 }
 
 #[cfg(test)]
