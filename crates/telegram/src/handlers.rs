@@ -2156,6 +2156,10 @@ mod tests {
         text.replace('>', "&gt;")
     }
 
+    fn is_escaped_reply_to_chat(message: &SendMessageRequest, chat_id: i64, text: &str) -> bool {
+        message.chat_id == chat_id && message.text == escaped_telegram_reply_text(text)
+    }
+
     impl MockSink {
         fn with_stt(transcription: Result<String>) -> Self {
             Self::with_voice_stt(true, Some(transcription))
@@ -2795,9 +2799,8 @@ mod tests {
             assert!(
                 requests.iter().any(|request| {
                     if let CapturedTelegramRequest::SendMessage(body) = request {
-                        body.chat_id == 42
-                            && body.parse_mode.as_deref() == Some("HTML")
-                            && body.text == escaped_telegram_reply_text(VOICE_REPLY_STT_SETUP_HINT)
+                        body.parse_mode.as_deref() == Some("HTML")
+                            && is_escaped_reply_to_chat(body, 42, VOICE_REPLY_STT_SETUP_HINT)
                     } else {
                         false
                     }
@@ -3259,9 +3262,10 @@ mod tests {
 
         assert_eq!(result.dispatch_calls, 0);
         assert!(
-            result.sent_messages.iter().any(|m| {
-                m.chat_id == 42 && m.text == escaped_telegram_reply_text(VOICE_REPLY_STT_SETUP_HINT)
-            }),
+            result
+                .sent_messages
+                .iter()
+                .any(|m| is_escaped_reply_to_chat(m, 42, VOICE_REPLY_STT_SETUP_HINT)),
             "expected STT setup hint, got: {:?}",
             result.sent_messages
         );
@@ -3286,7 +3290,7 @@ mod tests {
             result
                 .sent_messages
                 .iter()
-                .all(|m| { m.text != escaped_telegram_reply_text(VOICE_REPLY_STT_SETUP_HINT) }),
+                .all(|m| !is_escaped_reply_to_chat(m, 42, VOICE_REPLY_STT_SETUP_HINT)),
             "setup hint should not be sent when caption is present: {:?}",
             result.sent_messages
         );
@@ -3305,9 +3309,10 @@ mod tests {
 
         assert_eq!(result.dispatch_calls, 0);
         assert!(
-            result.sent_messages.iter().any(|m| {
-                m.chat_id == 42 && m.text == escaped_telegram_reply_text(VOICE_REPLY_UNAVAILABLE)
-            }),
+            result
+                .sent_messages
+                .iter()
+                .any(|m| is_escaped_reply_to_chat(m, 42, VOICE_REPLY_UNAVAILABLE)),
             "expected unavailable reply, got: {:?}",
             result.sent_messages
         );
@@ -3326,8 +3331,10 @@ mod tests {
 
         assert_eq!(result.dispatch_calls, 0);
         assert!(
-            result.sent_messages.iter().any(|m| m.chat_id == 42
-                && m.text == escaped_telegram_reply_text(VOICE_REPLY_UNAVAILABLE)),
+            result
+                .sent_messages
+                .iter()
+                .any(|m| is_escaped_reply_to_chat(m, 42, VOICE_REPLY_UNAVAILABLE)),
             "expected unavailable reply even with caption, got: {:?}",
             result.sent_messages
         );
