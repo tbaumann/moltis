@@ -5721,6 +5721,35 @@ mod tests {
     }
 
     #[test]
+    fn dcg_guard_extra_path_dirs_match_handler_script() {
+        // Parity guard: every directory in DCG_GUARD_EXTRA_PATH_DIRS must
+        // appear literally in the handler's `export PATH=` line. If
+        // someone edits one list without the other, the Rust startup
+        // probe and the shell handler will disagree on which directories
+        // are searched — exactly the class of bug #626 was about. Pin
+        // them together with an explicit assertion.
+        for rel in DCG_GUARD_EXTRA_PATH_DIRS {
+            let needle = if rel.starts_with('/') {
+                (*rel).to_string()
+            } else {
+                format!("/{rel}")
+            };
+            assert!(
+                DCG_GUARD_HANDLER_SH.contains(&needle),
+                "handler script missing PATH entry for {rel:?} (needle={needle:?})"
+            );
+        }
+        // Also pin the absolute form of the $HOME-relative entry so the
+        // fallback path (${{HOME:-/root}}/.local/bin) stays in sync with
+        // the Rust probe's DCG_GUARD_HOME_FALLBACK.
+        assert!(
+            DCG_GUARD_HANDLER_SH
+                .contains(&format!("${{HOME:-{DCG_GUARD_HOME_FALLBACK}}}/.local/bin")),
+            "handler script must use ${{HOME:-{DCG_GUARD_HOME_FALLBACK}}}/.local/bin fallback"
+        );
+    }
+
+    #[test]
     fn dcg_guard_handler_home_fallback_matches_rust_probe() {
         // The shell handler uses `${HOME:-/root}/.local/bin`; the Rust
         // `resolve_dcg_binary` probe must fall back to the same `/root`
