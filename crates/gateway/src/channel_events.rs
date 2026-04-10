@@ -1713,11 +1713,6 @@ impl ChannelEventSink for GatewayChannelEventSink {
     }
 }
 
-/// Format a numbered model list, optionally filtered by provider.
-///
-/// Each line is: `N. DisplayName [provider] *` (where `*` marks the current model).
-/// Uses the global index (across all models) so the switch command works with
-/// the same numbering regardless of filtering.
 /// Collect the set of distinct `provider` values from a model list.
 ///
 /// A `BTreeSet` makes the contract explicit: provider names are unique and
@@ -1731,6 +1726,11 @@ fn unique_providers(models: &[serde_json::Value]) -> Vec<String> {
         .collect()
 }
 
+/// Format a numbered model list, optionally filtered by provider.
+///
+/// Each line is: `N. DisplayName [provider] *` (where `*` marks the current model).
+/// Uses the global index (across all models) so the switch command works with
+/// the same numbering regardless of filtering.
 fn format_model_list(
     models: &[serde_json::Value],
     current_model: Option<&str>,

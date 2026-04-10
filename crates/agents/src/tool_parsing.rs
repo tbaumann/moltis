@@ -995,6 +995,16 @@ between
         assert!(calls.is_empty());
     }
 
+    /// A valid-looking Zhipu tool name without any arg pairs is ambiguous and
+    /// should be skipped rather than inventing a zero-argument call.
+    #[test]
+    fn zhipu_no_arg_pairs_skipped() {
+        let text = r#"<tool_call>exec</tool_call>"#;
+        let (calls, remaining) = parse_tool_calls_from_text(text);
+        assert!(calls.is_empty());
+        assert_eq!(remaining.as_deref(), Some(text));
+    }
+
     /// A Zhipu block with a JSON body (`<tool_call>{"tool":...}</tool_call>`)
     /// must defer to the JSON/recover path — the bare-JSON collector handles
     /// it, and the merge step de-overlaps so we don't double-count.
@@ -1024,6 +1034,16 @@ between
         let (calls, _) = parse_tool_calls_from_text(text);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].arguments["command"], "echo \"hello\nworld\"");
+    }
+
+    /// Empty arg keys are ignored; without any valid key/value pairs the block
+    /// must be skipped entirely.
+    #[test]
+    fn zhipu_empty_arg_key_skipped() {
+        let text = r#"<tool_call>exec<arg_key>   </arg_key><arg_value>ls</arg_value></tool_call>"#;
+        let (calls, remaining) = parse_tool_calls_from_text(text);
+        assert!(calls.is_empty());
+        assert_eq!(remaining.as_deref(), Some(text));
     }
 
     /// Exact leaked output from issue #637 must round-trip cleanly.
