@@ -42,42 +42,19 @@ fn resolve_hook_channel_binding(
     session_key: &str,
     session_entry: Option<&moltis_sessions::metadata::SessionEntry>,
 ) -> Option<moltis_common::hooks::ChannelBinding> {
-    let binding = if session_key == "cron:heartbeat" {
-        moltis_common::hooks::ChannelBinding {
-            surface: Some("heartbeat".to_string()),
-            session_kind: Some("cron".to_string()),
-            ..Default::default()
-        }
-    } else if session_key.starts_with("cron:") {
-        moltis_common::hooks::ChannelBinding {
-            surface: Some("cron".to_string()),
-            session_kind: Some("cron".to_string()),
-            ..Default::default()
-        }
-    } else if let Some(binding_json) =
-        session_entry.and_then(|entry| entry.channel_binding.as_deref())
-    {
-        match serde_json::from_str::<moltis_channels::ChannelReplyTarget>(binding_json) {
-            Ok(target) => (&target).into(),
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    session = %session_key,
-                    "failed to parse channel_binding JSON; falling back to web"
-                );
-                moltis_common::hooks::ChannelBinding {
-                    surface: Some("web".to_string()),
-                    session_kind: Some("web".to_string()),
-                    ..Default::default()
-                }
-            },
-        }
-    } else {
-        moltis_common::hooks::ChannelBinding {
-            surface: Some("web".to_string()),
-            session_kind: Some("web".to_string()),
-            ..Default::default()
-        }
+    let binding = match moltis_channels::resolve_session_channel_binding(
+        session_key,
+        session_entry.and_then(|entry| entry.channel_binding.as_deref()),
+    ) {
+        Ok(binding) => binding,
+        Err(error) => {
+            warn!(
+                error = %error,
+                session = %session_key,
+                "failed to parse channel_binding JSON; falling back to web"
+            );
+            moltis_channels::web_session_channel_binding()
+        },
     };
     (!binding.is_empty()).then_some(binding)
 }
@@ -2857,6 +2834,47 @@ mod tests {
         let service = LiveSessionService::new(store, metadata).with_hooks(Arc::new(hook_registry));
         service
             .resolve(serde_json::json!({ "key": "main", "include_history": false }))
+            .await
+            .unwrap();
+
+        let payloads = payloads.lock().unwrap();
+        let payload = payloads
+            .first()
+            .unwrap_or_else(|| panic!("missing SessionStart payload"));
+        match payload {
+            HookPayload::SessionStart { channel, .. } => {
+                let channel = channel.clone().unwrap_or_else(|| panic!("missing channel"));
+                assert_eq!(channel.surface.as_deref(), Some("web"));
+                assert_eq!(channel.session_kind.as_deref(), Some("web"));
+                assert!(channel.channel_type.is_none());
+                assert!(channel.account_id.is_none());
+                assert!(channel.chat_id.is_none());
+            },
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_dispatches_session_start_with_web_binding_for_invalid_channel_binding() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::new(dir.path().to_path_buf()));
+        let pool = sqlite_pool().await;
+        let metadata = Arc::new(SqliteSessionMetadata::new(pool));
+        let key = "telegram:bot-main:-100123";
+        metadata.upsert(key, None).await.unwrap();
+        metadata
+            .set_channel_binding(key, Some("{not-json".to_string()))
+            .await;
+
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut hook_registry = HookRegistry::new();
+        hook_registry.register(Arc::new(RecordingHook {
+            payloads: Arc::clone(&payloads),
+        }));
+
+        let service = LiveSessionService::new(store, metadata).with_hooks(Arc::new(hook_registry));
+        service
+            .resolve(serde_json::json!({ "key": key, "include_history": false }))
             .await
             .unwrap();
 

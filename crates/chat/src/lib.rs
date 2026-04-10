@@ -1080,39 +1080,19 @@ fn resolve_channel_runtime_context(
     session_key: &str,
     session_entry: Option<&SessionEntry>,
 ) -> moltis_common::hooks::ChannelBinding {
-    if session_key == "cron:heartbeat" {
-        return moltis_common::hooks::ChannelBinding {
-            surface: Some("heartbeat".to_string()),
-            session_kind: Some("cron".to_string()),
-            ..Default::default()
-        };
-    }
-
-    if session_key.starts_with("cron:") {
-        return moltis_common::hooks::ChannelBinding {
-            surface: Some("cron".to_string()),
-            session_kind: Some("cron".to_string()),
-            ..Default::default()
-        };
-    }
-
-    if let Some(binding_json) = session_entry.and_then(|entry| entry.channel_binding.as_deref()) {
-        match serde_json::from_str::<moltis_channels::ChannelReplyTarget>(binding_json) {
-            Ok(binding) => return (&binding).into(),
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    session = %session_key,
-                    "failed to parse channel_binding JSON; falling back to web"
-                );
-            },
-        }
-    }
-
-    moltis_common::hooks::ChannelBinding {
-        surface: Some("web".to_string()),
-        session_kind: Some("web".to_string()),
-        ..Default::default()
+    match moltis_channels::resolve_session_channel_binding(
+        session_key,
+        session_entry.and_then(|entry| entry.channel_binding.as_deref()),
+    ) {
+        Ok(binding) => binding,
+        Err(error) => {
+            warn!(
+                error = %error,
+                session = %session_key,
+                "failed to parse channel_binding JSON; falling back to web"
+            );
+            moltis_channels::web_session_channel_binding()
+        },
     }
 }
 
@@ -9473,6 +9453,16 @@ mod tests {
             tool_context["_channel"]["chat_type"],
             "channel_or_supergroup"
         );
+    }
+
+    #[test]
+    fn build_tool_context_omits_channel_binding_without_runtime_context() {
+        let tool_context = build_tool_context("main", None, None, None);
+
+        assert_eq!(tool_context["_session_key"], "main");
+        assert!(tool_context.get("_channel").is_none());
+        assert!(tool_context.get("_accept_language").is_none());
+        assert!(tool_context.get("_conn_id").is_none());
     }
 
     #[test]

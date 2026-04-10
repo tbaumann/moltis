@@ -1322,6 +1322,7 @@ pub async fn run_agent_loop_with_context(
                                         tool_name: tc_name.clone(),
                                         success: !has_error,
                                         result: Some(val.clone()),
+                                        channel: channel_for_hooks.clone(),
                                     };
                                     if let Err(e) = hooks.dispatch(&payload).await {
                                         warn!(tool = %tc_name, error = %e, "AfterToolCall hook dispatch failed");
@@ -1344,6 +1345,7 @@ pub async fn run_agent_loop_with_context(
                                         tool_name: tc_name.clone(),
                                         success: false,
                                         result: None,
+                                        channel: channel_for_hooks.clone(),
                                     };
                                     if let Err(e) = hooks.dispatch(&payload).await {
                                         warn!(tool = %tc_name, error = %e, "AfterToolCall hook dispatch failed");
@@ -2047,6 +2049,7 @@ pub async fn run_agent_loop_streaming(
                                         tool_name: tc_name.clone(),
                                         success: !has_error,
                                         result: Some(val.clone()),
+                                        channel: channel_for_hooks.clone(),
                                     };
                                     if let Err(e) = hooks.dispatch(&payload).await {
                                         warn!(tool = %tc_name, error = %e, "AfterToolCall hook dispatch failed");
@@ -2067,6 +2070,7 @@ pub async fn run_agent_loop_streaming(
                                         tool_name: tc_name.clone(),
                                         success: false,
                                         result: None,
+                                        channel: channel_for_hooks.clone(),
                                     };
                                     if let Err(e) = hooks.dispatch(&payload).await {
                                         warn!(tool = %tc_name, error = %e, "AfterToolCall hook dispatch failed");
@@ -2160,7 +2164,7 @@ mod tests {
         }
 
         fn events(&self) -> &[HookEvent] {
-            static EVENTS: [HookEvent; 1] = [HookEvent::BeforeToolCall];
+            static EVENTS: [HookEvent; 2] = [HookEvent::BeforeToolCall, HookEvent::AfterToolCall];
             &EVENTS
         }
 
@@ -5617,6 +5621,21 @@ mod tests {
             .unwrap_or_else(|| panic!("missing BeforeToolCall payload"));
         match payload {
             HookPayload::BeforeToolCall { channel, .. } => {
+                let channel = channel.clone().unwrap_or_else(|| panic!("missing channel"));
+                assert_eq!(channel.channel_type.as_deref(), Some("telegram"));
+                assert_eq!(channel.account_id.as_deref(), Some("bot-main"));
+                assert_eq!(channel.chat_id.as_deref(), Some("-100123"));
+                assert_eq!(channel.chat_type.as_deref(), Some("channel_or_supergroup"));
+            },
+            other => panic!("unexpected payload: {other:?}"),
+        }
+
+        let payload = payloads
+            .iter()
+            .find(|payload| matches!(payload, HookPayload::AfterToolCall { .. }))
+            .unwrap_or_else(|| panic!("missing AfterToolCall payload"));
+        match payload {
+            HookPayload::AfterToolCall { channel, .. } => {
                 let channel = channel.clone().unwrap_or_else(|| panic!("missing channel"));
                 assert_eq!(channel.channel_type.as_deref(), Some("telegram"));
                 assert_eq!(channel.account_id.as_deref(), Some("bot-main"));

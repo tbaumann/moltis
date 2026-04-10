@@ -193,6 +193,8 @@ pub enum HookPayload {
         tool_name: String,
         success: bool,
         result: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<ChannelBinding>,
     },
     ToolResultPersist {
         session_key: String,
@@ -1030,6 +1032,37 @@ mod tests {
             },
             other => panic!("unexpected payload: {other:?}"),
         }
+
+        let after = HookPayload::AfterToolCall {
+            session_key: "s".into(),
+            tool_name: "exec".into(),
+            success: true,
+            result: Some(serde_json::json!({"cwd": "/tmp"})),
+            channel: Some(test_channel_binding()),
+        };
+        let json = serde_json::to_string(&after).unwrap();
+        let deser: HookPayload = serde_json::from_str(&json).unwrap();
+        match deser {
+            HookPayload::AfterToolCall { channel, .. } => {
+                assert_eq!(channel, Some(test_channel_binding()));
+            },
+            other => panic!("unexpected payload: {other:?}"),
+        }
+
+        let persist = HookPayload::ToolResultPersist {
+            session_key: "s".into(),
+            tool_name: "exec".into(),
+            result: serde_json::json!({"cwd": "/tmp"}),
+            channel: Some(test_channel_binding()),
+        };
+        let json = serde_json::to_string(&persist).unwrap();
+        let deser: HookPayload = serde_json::from_str(&json).unwrap();
+        match deser {
+            HookPayload::ToolResultPersist { channel, .. } => {
+                assert_eq!(channel, Some(test_channel_binding()));
+            },
+            other => panic!("unexpected payload: {other:?}"),
+        }
     }
 
     #[test]
@@ -1060,6 +1093,21 @@ mod tests {
                 channel_binding, ..
             } => {
                 assert!(channel_binding.is_none());
+            },
+            other => panic!("unexpected payload: {other:?}"),
+        }
+
+        let json = serde_json::json!({
+            "event": "AfterToolCall",
+            "session_key": "s",
+            "tool_name": "exec",
+            "success": true,
+            "result": {"cwd": "/tmp"}
+        });
+        let payload: HookPayload = serde_json::from_value(json).unwrap();
+        match payload {
+            HookPayload::AfterToolCall { channel, .. } => {
+                assert!(channel.is_none());
             },
             other => panic!("unexpected payload: {other:?}"),
         }
