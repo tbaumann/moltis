@@ -329,7 +329,7 @@ If requirements aren't met, the hook is skipped (not an error).
 
 Hooks that fail repeatedly are automatically disabled:
 
-- **Threshold**: 5 consecutive failures
+- **Threshold**: 3 consecutive failures
 - **Cooldown**: 60 seconds
 - **Recovery**: Auto-re-enabled after cooldown
 

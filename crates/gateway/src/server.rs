@@ -4502,6 +4502,8 @@ echo "$(date -Iseconds) tool=$tool" >> /tmp/moltis-hook.log
 
 **Can modify or block (sequential dispatch):**
 - `BeforeAgentStart` — before a new agent run begins
+- `BeforeLLMCall` — before a prompt is sent to the LLM provider
+- `AfterLLMCall` — after an LLM response arrives, before any tool execution
 - `BeforeToolCall` — before executing a tool (inspect/modify arguments)
 - `BeforeCompaction` — before compacting chat history
 - `MessageReceived` — when an inbound channel/UI message arrives;
