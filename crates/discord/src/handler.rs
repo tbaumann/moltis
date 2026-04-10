@@ -312,6 +312,14 @@ fn image_media_type_fallback(content_type: Option<&str>, filename: &str) -> Stri
     }
 }
 
+fn voice_stt_unavailable_log_body(caption: &str) -> String {
+    if caption.is_empty() {
+        "[Voice message - STT unavailable]".to_string()
+    } else {
+        format!("{caption}\n\n[Voice message - STT unavailable]")
+    }
+}
+
 /// Download a Discord CDN attachment, enforcing a size cap.
 async fn download_discord_attachment(
     client: &reqwest::Client,
@@ -864,6 +872,19 @@ impl EventHandler for Handler {
                     (media.body, media.attachments, media.voice_audio, media.kind)
                 },
                 MediaResolveOutcome::VoiceSttUnavailable => {
+                    let body = voice_stt_unavailable_log_body(&text);
+                    log_discord_message(
+                        message_log.as_ref(),
+                        &self.account_id,
+                        &peer_id,
+                        &username,
+                        &sender_name,
+                        &chat_id,
+                        is_guild,
+                        &body,
+                        access_granted,
+                    )
+                    .await;
                     if let Err(e) = send_discord_text_simple(
                         &ctx,
                         msg.channel_id,
@@ -1648,6 +1669,18 @@ mod tests {
         assert_eq!(image_media_type_fallback(None, "pic.webp"), "image/webp");
         // Unknown: default to jpeg.
         assert_eq!(image_media_type_fallback(None, "pic.bin"), "image/jpeg");
+    }
+
+    #[test]
+    fn voice_stt_unavailable_body_uses_marker_and_caption() {
+        assert_eq!(
+            voice_stt_unavailable_log_body(""),
+            "[Voice message - STT unavailable]"
+        );
+        assert_eq!(
+            voice_stt_unavailable_log_body("caption"),
+            "caption\n\n[Voice message - STT unavailable]"
+        );
     }
 
     #[test]

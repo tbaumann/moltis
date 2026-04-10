@@ -72,8 +72,10 @@ pub async fn ssrf_check(url: &Url, allowlist: &[ipnet::IpNet]) -> Result<()> {
 mod tests {
     use std::{net::IpAddr, str::FromStr};
 
-    use super::{is_private_ip, is_ssrf_allowed, ssrf_check};
-    use url::Url;
+    use {
+        super::{is_private_ip, is_ssrf_allowed, ssrf_check},
+        url::Url,
+    };
 
     #[test]
     fn private_ip_v4_rules() {
