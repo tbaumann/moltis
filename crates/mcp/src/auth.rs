@@ -23,7 +23,8 @@ use crate::{
 
 use moltis_oauth::{
     OAuthConfig, OAuthFlow, OAuthTokens, RegistrationStore, StoredRegistration, TokenStore,
-    fetch_as_metadata, fetch_resource_metadata, parse_www_authenticate, register_client,
+    fetch_as_metadata, fetch_resource_metadata, normalize_loopback_redirect,
+    parse_www_authenticate, register_client,
 };
 
 // ── Auth state ─────────────────────────────────────────────────────────────
@@ -529,37 +530,6 @@ impl McpOAuthProvider {
     }
 }
 
-/// Rewrite `https://` → `http://` for loopback redirect URIs so dynamic
-/// client registration (RFC 7591) is accepted by authorization servers that
-/// enforce RFC 8252 §8.3. Non-loopback hosts and non-`https` schemes are
-/// returned unchanged.
-///
-/// The main TLS listener's HTTP peek/redirect bounces the plain-HTTP OAuth
-/// callback back onto the real HTTPS handler transparently, so this rewrite
-/// is safe for any deployment where the web UI is reached via a loopback
-/// host (`localhost`, `127.0.0.1`, `::1`).
-fn normalize_loopback_redirect(uri: &str) -> String {
-    let Ok(mut parsed) = Url::parse(uri) else {
-        return uri.to_string();
-    };
-    if parsed.scheme() != "https" {
-        return uri.to_string();
-    }
-    let is_loopback = match parsed.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    };
-    if !is_loopback {
-        return uri.to_string();
-    }
-    if parsed.set_scheme("http").is_err() {
-        return uri.to_string();
-    }
-    parsed.to_string()
-}
-
 #[async_trait]
 impl McpAuthProvider for McpOAuthProvider {
     async fn access_token(&self) -> Result<Option<Secret<String>>> {
@@ -1061,89 +1031,6 @@ mod tests {
     fn store_key_format() {
         let provider = McpOAuthProvider::new("my-server", "https://mcp.example.com");
         assert_eq!(provider.store_key(), "mcp:my-server");
-    }
-
-    // ── normalize_loopback_redirect ────────────────────────────────────────
-
-    #[test]
-    fn normalize_loopback_rewrites_https_localhost() {
-        assert_eq!(
-            normalize_loopback_redirect("https://localhost:1455/auth/callback"),
-            "http://localhost:1455/auth/callback",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_rewrites_https_localhost_default_port() {
-        assert_eq!(
-            normalize_loopback_redirect("https://localhost/auth/callback"),
-            "http://localhost/auth/callback",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_rewrites_https_ipv4_loopback() {
-        assert_eq!(
-            normalize_loopback_redirect("https://127.0.0.1:1455/auth/callback"),
-            "http://127.0.0.1:1455/auth/callback",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_rewrites_https_ipv6_loopback() {
-        assert_eq!(
-            normalize_loopback_redirect("https://[::1]:1455/auth/callback"),
-            "http://[::1]:1455/auth/callback",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_rewrites_https_localhost_case_insensitive() {
-        assert_eq!(
-            normalize_loopback_redirect("https://LocalHost:1455/auth/callback"),
-            "http://localhost:1455/auth/callback",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_preserves_real_hostname() {
-        assert_eq!(
-            normalize_loopback_redirect("https://moltis.lan/auth/callback"),
-            "https://moltis.lan/auth/callback",
-        );
-        assert_eq!(
-            normalize_loopback_redirect("https://moltis.example.com:1455/auth/callback"),
-            "https://moltis.example.com:1455/auth/callback",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_preserves_non_loopback_ipv4() {
-        assert_eq!(
-            normalize_loopback_redirect("https://192.168.1.10:1455/auth/callback"),
-            "https://192.168.1.10:1455/auth/callback",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_preserves_http_scheme() {
-        assert_eq!(
-            normalize_loopback_redirect("http://localhost:1455/auth/callback"),
-            "http://localhost:1455/auth/callback",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_preserves_query_and_path() {
-        assert_eq!(
-            normalize_loopback_redirect("https://localhost:1455/auth/callback?foo=bar"),
-            "http://localhost:1455/auth/callback?foo=bar",
-        );
-    }
-
-    #[test]
-    fn normalize_loopback_returns_unparseable_input_unchanged() {
-        assert_eq!(normalize_loopback_redirect("not a url"), "not a url",);
     }
 
     // ── start_web_oauth_flow loopback rewrite ──────────────────────────────

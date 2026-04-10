@@ -22,7 +22,7 @@ use {
     moltis_config::schema::ProvidersConfig,
     moltis_oauth::{
         CallbackServer, OAuthFlow, TokenStore, callback_port, device_flow, load_oauth_config,
-        parse_callback_input,
+        normalize_loopback_redirect, parse_callback_input,
     },
     moltis_providers::{ProviderRegistry, raw_model_id},
 };
@@ -1942,12 +1942,18 @@ impl ProviderSetupService for LiveProviderSetupService {
             .ok_or_else(|| "missing 'provider' parameter".to_string())?
             .to_string();
 
+        // RFC 8252 §7.3/§8.3: loopback redirect URIs must use `http`.
+        // The UI sends `${window.location.origin}/auth/callback`, which is
+        // `https://localhost:<port>/auth/callback` on TLS-enabled
+        // deployments. Rewrite loopback origins to `http` so strict
+        // authorization servers accept them; the TLS listener's HTTP peek
+        // redirect bounces the callback back onto the HTTPS handler.
         let redirect_uri = params
             .get("redirectUri")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|v| !v.is_empty())
-            .map(ToOwned::to_owned);
+            .map(normalize_loopback_redirect);
 
         let mut oauth_config = load_oauth_config(&provider_name)
             .ok_or_else(|| format!("no OAuth config for provider: {provider_name}"))?;
