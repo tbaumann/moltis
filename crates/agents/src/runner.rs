@@ -823,6 +823,24 @@ pub async fn run_agent_loop(
     .await
 }
 
+fn channel_binding_from_tool_context(
+    session_key: &str,
+    tool_context: Option<&serde_json::Value>,
+) -> Option<ChannelBinding> {
+    let channel_value = tool_context.and_then(|ctx| ctx.get("_channel"))?;
+    match serde_json::from_value(channel_value.clone()) {
+        Ok(binding) => Some(binding),
+        Err(error) => {
+            warn!(
+                error = %error,
+                session = %session_key,
+                "failed to parse _channel tool context for hooks; ignoring channel provenance"
+            );
+            None
+        },
+    }
+}
+
 /// Like `run_agent_loop` but accepts optional context values that are injected
 /// into every tool call's parameters (e.g. `_session_key`).
 pub async fn run_agent_loop_with_context(
@@ -877,10 +895,8 @@ pub async fn run_agent_loop_with_context(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let channel_for_hooks: Option<ChannelBinding> = tool_context
-        .as_ref()
-        .and_then(|ctx| ctx.get("_channel"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let channel_for_hooks =
+        channel_binding_from_tool_context(&session_key_for_hooks, tool_context.as_ref());
 
     let mut iterations = 0;
     let mut total_tool_calls = 0;
@@ -1477,10 +1493,8 @@ pub async fn run_agent_loop_streaming(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let channel_for_hooks: Option<ChannelBinding> = tool_context
-        .as_ref()
-        .and_then(|ctx| ctx.get("_channel"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok());
+    let channel_for_hooks =
+        channel_binding_from_tool_context(&session_key_for_hooks, tool_context.as_ref());
 
     let mut iterations = 0;
     let mut total_tool_calls = 0;
@@ -5641,6 +5655,79 @@ mod tests {
                 assert_eq!(channel.account_id.as_deref(), Some("bot-main"));
                 assert_eq!(channel.chat_id.as_deref(), Some("-100123"));
                 assert_eq!(channel.chat_type.as_deref(), Some("channel_or_supergroup"));
+            },
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn channel_binding_from_tool_context_returns_none_for_invalid_channel_json() {
+        let tool_context = serde_json::json!({
+            "_session_key": "telegram:bot-main:-100123",
+            "_channel": {
+                "surface": 42
+            }
+        });
+
+        let binding =
+            channel_binding_from_tool_context("telegram:bot-main:-100123", Some(&tool_context));
+
+        assert!(binding.is_none());
+    }
+
+    #[tokio::test]
+    async fn non_streaming_hooks_ignore_invalid_channel_binding_from_tool_context() {
+        let provider = Arc::new(NativeTextFunctionProvider {
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut tools = ToolRegistry::new();
+        tools.register(Box::new(TestProcessTool));
+
+        let payloads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut hook_registry = HookRegistry::new();
+        hook_registry.register(Arc::new(RecordingHook {
+            payloads: Arc::clone(&payloads),
+        }));
+
+        let result = run_agent_loop_with_context(
+            provider,
+            &tools,
+            "You are a test bot.",
+            &UserContent::text("execute pwd"),
+            None,
+            None,
+            Some(serde_json::json!({
+                "_session_key": "telegram:bot-main:-100123",
+                "_channel": {
+                    "surface": 42
+                }
+            })),
+            Some(Arc::new(hook_registry)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.tool_calls_made, 1);
+
+        let payloads = payloads.lock().unwrap();
+        let before_payload = payloads
+            .iter()
+            .find(|payload| matches!(payload, HookPayload::BeforeToolCall { .. }))
+            .unwrap_or_else(|| panic!("missing BeforeToolCall payload"));
+        match before_payload {
+            HookPayload::BeforeToolCall { channel, .. } => {
+                assert!(channel.is_none());
+            },
+            other => panic!("unexpected payload: {other:?}"),
+        }
+
+        let after_payload = payloads
+            .iter()
+            .find(|payload| matches!(payload, HookPayload::AfterToolCall { .. }))
+            .unwrap_or_else(|| panic!("missing AfterToolCall payload"));
+        match after_payload {
+            HookPayload::AfterToolCall { channel, .. } => {
+                assert!(channel.is_none());
             },
             other => panic!("unexpected payload: {other:?}"),
         }
