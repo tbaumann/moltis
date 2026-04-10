@@ -228,6 +228,18 @@ impl McpOAuthProvider {
         redirect_uri: &str,
         www_authenticate: Option<&str>,
     ) -> Result<String> {
+        // RFC 8252 §7.3/§8.3: loopback redirect URIs must use the `http`
+        // scheme. Many authorization servers (e.g. Attio) reject
+        // `https://localhost` with `invalid_redirect_uri`. Moltis serves the
+        // web UI over TLS, so the origin-derived callback arrives as
+        // `https://localhost:<port>/auth/callback`. We rewrite the scheme for
+        // loopback hosts; the TLS listener's peek-based HTTP→HTTPS redirect
+        // (see `moltis_tls::serve_tls_with_http_redirect`) transparently
+        // bounces the browser back onto the real HTTPS callback handler,
+        // preserving path and query string.
+        let redirect_uri = normalize_loopback_redirect(redirect_uri);
+        let redirect_uri = redirect_uri.as_str();
+
         let (client_id, auth_url, token_url, scopes, resource) =
             if let Some(ov) = &self.oauth_override {
                 // Manual override: skip discovery
@@ -515,6 +527,37 @@ impl McpOAuthProvider {
             resource,
         ))
     }
+}
+
+/// Rewrite `https://` → `http://` for loopback redirect URIs so dynamic
+/// client registration (RFC 7591) is accepted by authorization servers that
+/// enforce RFC 8252 §8.3. Non-loopback hosts and non-`https` schemes are
+/// returned unchanged.
+///
+/// The main TLS listener's HTTP peek/redirect bounces the plain-HTTP OAuth
+/// callback back onto the real HTTPS handler transparently, so this rewrite
+/// is safe for any deployment where the web UI is reached via a loopback
+/// host (`localhost`, `127.0.0.1`, `::1`).
+fn normalize_loopback_redirect(uri: &str) -> String {
+    let Ok(mut parsed) = Url::parse(uri) else {
+        return uri.to_string();
+    };
+    if parsed.scheme() != "https" {
+        return uri.to_string();
+    }
+    let is_loopback = match parsed.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    };
+    if !is_loopback {
+        return uri.to_string();
+    }
+    if parsed.set_scheme("http").is_err() {
+        return uri.to_string();
+    }
+    parsed.to_string()
 }
 
 #[async_trait]
@@ -1018,5 +1061,177 @@ mod tests {
     fn store_key_format() {
         let provider = McpOAuthProvider::new("my-server", "https://mcp.example.com");
         assert_eq!(provider.store_key(), "mcp:my-server");
+    }
+
+    // ── normalize_loopback_redirect ────────────────────────────────────────
+
+    #[test]
+    fn normalize_loopback_rewrites_https_localhost() {
+        assert_eq!(
+            normalize_loopback_redirect("https://localhost:1455/auth/callback"),
+            "http://localhost:1455/auth/callback",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_rewrites_https_localhost_default_port() {
+        assert_eq!(
+            normalize_loopback_redirect("https://localhost/auth/callback"),
+            "http://localhost/auth/callback",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_rewrites_https_ipv4_loopback() {
+        assert_eq!(
+            normalize_loopback_redirect("https://127.0.0.1:1455/auth/callback"),
+            "http://127.0.0.1:1455/auth/callback",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_rewrites_https_ipv6_loopback() {
+        assert_eq!(
+            normalize_loopback_redirect("https://[::1]:1455/auth/callback"),
+            "http://[::1]:1455/auth/callback",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_rewrites_https_localhost_case_insensitive() {
+        assert_eq!(
+            normalize_loopback_redirect("https://LocalHost:1455/auth/callback"),
+            "http://localhost:1455/auth/callback",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_preserves_real_hostname() {
+        assert_eq!(
+            normalize_loopback_redirect("https://moltis.lan/auth/callback"),
+            "https://moltis.lan/auth/callback",
+        );
+        assert_eq!(
+            normalize_loopback_redirect("https://moltis.example.com:1455/auth/callback"),
+            "https://moltis.example.com:1455/auth/callback",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_preserves_non_loopback_ipv4() {
+        assert_eq!(
+            normalize_loopback_redirect("https://192.168.1.10:1455/auth/callback"),
+            "https://192.168.1.10:1455/auth/callback",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_preserves_http_scheme() {
+        assert_eq!(
+            normalize_loopback_redirect("http://localhost:1455/auth/callback"),
+            "http://localhost:1455/auth/callback",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_preserves_query_and_path() {
+        assert_eq!(
+            normalize_loopback_redirect("https://localhost:1455/auth/callback?foo=bar"),
+            "http://localhost:1455/auth/callback?foo=bar",
+        );
+    }
+
+    #[test]
+    fn normalize_loopback_returns_unparseable_input_unchanged() {
+        assert_eq!(normalize_loopback_redirect("not a url"), "not a url",);
+    }
+
+    // ── start_web_oauth_flow loopback rewrite ──────────────────────────────
+
+    /// Integration test: when the UI passes `https://localhost:…/auth/callback`,
+    /// the full `start_web_oauth_flow` must register and request authorization
+    /// with the `http://localhost:…/auth/callback` form, satisfying RFC 8252.
+    #[tokio::test]
+    async fn start_web_oauth_flow_rewrites_loopback_redirect() {
+        let mut server = mockito::Server::new_async().await;
+        let base = server.url();
+        let https_redirect = "https://localhost:1455/auth/callback";
+        let http_redirect = "http://localhost:1455/auth/callback";
+
+        let resource_meta = server
+            .mock("GET", "/mcp/.well-known/oauth-protected-resource")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "resource": format!("{base}/mcp"),
+                    "authorization_servers": [base.clone()],
+                    "scopes_supported": ["read"],
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let as_meta = server
+            .mock("GET", "/.well-known/oauth-authorization-server")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "issuer": base.clone(),
+                    "authorization_endpoint": format!("{base}/authorize"),
+                    "token_endpoint": format!("{base}/token"),
+                    "registration_endpoint": format!("{base}/register"),
+                    "scopes_supported": ["read"],
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        // The registration endpoint must receive the HTTP form, not HTTPS.
+        let register = server
+            .mock("POST", "/register")
+            .match_body(Matcher::PartialJson(serde_json::json!({
+                "redirect_uris": [http_redirect],
+            })))
+            .with_status(201)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "client_id": "client-loopback",
+                    "redirect_uris": [http_redirect],
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let provider = McpOAuthProvider::with_stores(
+            "loopback",
+            &format!("{base}/mcp"),
+            TokenStore::with_path(dir.path().join("tokens.json")),
+            RegistrationStore::with_path(dir.path().join("registrations.json")),
+        );
+
+        let auth_url = provider
+            .start_web_oauth_flow(https_redirect, None)
+            .await
+            .expect("start_web_oauth_flow should succeed");
+
+        // The authorization URL must encode the rewritten HTTP redirect URI.
+        let parsed = url::Url::parse(&auth_url).unwrap();
+        let encoded_redirect = parsed
+            .query_pairs()
+            .find(|(k, _)| k == "redirect_uri")
+            .map(|(_, v)| v.into_owned())
+            .expect("auth URL must have redirect_uri");
+        assert_eq!(encoded_redirect, http_redirect);
+
+        resource_meta.assert_async().await;
+        as_meta.assert_async().await;
+        register.assert_async().await;
     }
 }
