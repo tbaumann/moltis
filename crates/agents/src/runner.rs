@@ -104,6 +104,7 @@ const AUTO_CONTINUE_SUBSTANTIVE_TEXT_THRESHOLD: usize = 40;
 
 /// Returns `true` if `text` (trimmed) is long enough to be considered a real
 /// final answer rather than an empty/terse pause.
+#[must_use]
 fn is_substantive_answer_text(text: &str) -> bool {
     text.trim().chars().count() >= AUTO_CONTINUE_SUBSTANTIVE_TEXT_THRESHOLD
 }
@@ -7040,10 +7041,14 @@ mod tests {
         assert_eq!(result.text, GH_628_LONG_ANSWER);
     }
 
-    /// Provider that makes 3 tool calls, emits a long substantive answer, then
-    /// (if called again) returns a short summary that would overwrite the
-    /// long answer. Used to verify that if auto-continue does fire, the long
-    /// text is preserved across iterations (GH #628).
+    /// Provider that makes 3 tool calls, then a short "ok" (count 3) that
+    /// triggers one auto-continue nudge, then the long `GH_628_LONG_ANSWER`
+    /// (count 4), then "done" (count 5+) as a guard against further nudges.
+    ///
+    /// Verifies the GH #628 regression: once auto-continue has fired and the
+    /// model produces a substantive long answer on the next iteration, that
+    /// long answer must be returned as-is rather than being clobbered by
+    /// another round of nudging that would leave "done" as `result.text`.
     struct AutoContinueLongThenShortProvider {
         call_count: std::sync::atomic::AtomicUsize,
     }
