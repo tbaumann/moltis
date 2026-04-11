@@ -1247,7 +1247,8 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
                          ONLY to sub-agents spawned via the spawn_agent tool; \
                          they do NOT filter tools for the main agent session. \
                          To allow/deny tools for the main session, set \
-                         tools.policy.allow / tools.policy.deny.",
+                         tools.policy.allow, tools.policy.deny, or \
+                         tools.policy.profile.",
                         quoted.join(", ")
                     ),
                 });
