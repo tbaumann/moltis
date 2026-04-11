@@ -48,7 +48,7 @@ impl StubProvider {
                 StreamEvent::Delta(body.to_string()),
                 StreamEvent::Done(Usage::default()),
             ],
-            context_window: 200,
+            context_window: 150,
             needle: None,
             saw_needle: Arc::new(Mutex::new(false)),
         }
@@ -58,7 +58,7 @@ impl StubProvider {
     pub fn new_error(msg: &str) -> Self {
         Self {
             events: vec![StreamEvent::Error(msg.to_string())],
-            context_window: 200,
+            context_window: 150,
             needle: None,
             saw_needle: Arc::new(Mutex::new(false)),
         }
@@ -68,7 +68,7 @@ impl StubProvider {
     pub fn new_empty_summary() -> Self {
         Self {
             events: vec![StreamEvent::Done(Usage::default())],
-            context_window: 200,
+            context_window: 150,
             needle: None,
             saw_needle: Arc::new(Mutex::new(false)),
         }

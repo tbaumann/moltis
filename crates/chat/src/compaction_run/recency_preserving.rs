@@ -89,10 +89,12 @@ mod tests {
 
     /// Context window small enough to force the tail budget to consume
     /// only a handful of messages in tests. With default
-    /// `threshold_percent=0.75` and `tail_budget_ratio=0.20`, 200 tokens
-    /// of budget means `200 × 0.75 × 0.20 = 30` tokens — roughly two
-    /// small messages after the 10-token metadata overhead per message.
-    const TEST_CONTEXT_WINDOW_TINY: u32 = 200;
+    /// `threshold_percent=0.95` and `tail_budget_ratio=0.20`, 150 tokens
+    /// of context means a tail budget of `150 × 0.95 × 0.20 ≈ 29`
+    /// tokens — roughly two small messages after the 10-token metadata
+    /// overhead per message, which is exactly what the happy-path
+    /// tests assert.
+    const TEST_CONTEXT_WINDOW_TINY: u32 = 150;
 
     fn mk_user(text: &str) -> Value {
         json!({"role": "user", "content": text})

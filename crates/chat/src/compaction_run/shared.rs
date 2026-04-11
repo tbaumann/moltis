@@ -53,11 +53,21 @@ pub(super) fn compute_boundaries(
         ((f64::from(context_window) * f64::from(threshold) * f64::from(tail_ratio)).round() as u64)
             .max(1);
 
-    // Walk backward from the end until either the budget is consumed or the
-    // floor (protect_tail_min) is satisfied. Whichever covers more messages
-    // wins, so small sessions still keep the floor even when their tail is
-    // tiny and large sessions honour the token budget when the floor is too
-    // small.
+    // Walk backward from the end until either the budget is consumed or
+    // the floor (protect_tail_min) is satisfied. Whichever covers more
+    // messages wins, so small sessions still keep the floor even when
+    // their tail is tiny and large sessions honour the token budget
+    // when the floor is too small.
+    //
+    // This is a **contiguous** walk: the tail is always a suffix of the
+    // history, never a cherry-picked set. When a message breaks the
+    // budget AND the floor is satisfied, the walk stops immediately —
+    // we deliberately don't skip over a large message to pack smaller
+    // earlier ones into the tail, because the resulting "tail" would
+    // have a gap and no longer be contiguous. Reviewers have asked
+    // whether this greedy break loses tokens; it does, but only
+    // relative to a non-contiguous "maximum packing" strategy, which
+    // isn't what we want here.
     let head_end = protect_head;
     let mut accumulated: u64 = 0;
     let mut tail_start = n;

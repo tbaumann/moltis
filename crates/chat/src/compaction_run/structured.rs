@@ -224,6 +224,8 @@ pub(super) async fn run(
     let n = history.len();
 
     // Head and tail already cover everything — no middle to summarise.
+    // After this guard, `head_end < tail_start` is guaranteed, so the
+    // slice below is always non-empty.
     if head_end >= tail_start {
         let kept = in_place_prune_or_err(history, config, &bounds)?;
         return Ok(CompactionOutcome {
@@ -235,15 +237,6 @@ pub(super) async fn run(
     }
 
     let middle = &history[head_end..tail_start];
-    if middle.is_empty() {
-        let kept = in_place_prune_or_err(history, config, &bounds)?;
-        return Ok(CompactionOutcome {
-            history: kept,
-            effective_mode: CompactionMode::Structured,
-            input_tokens: 0,
-            output_tokens: 0,
-        });
-    }
 
     // Detect re-compaction: if any message in the history looks like a
     // previous compaction summary, include it in the prompt so the model

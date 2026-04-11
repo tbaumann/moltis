@@ -162,7 +162,7 @@ All compaction settings live under `[chat.compaction]` in `moltis.toml`:
 ```toml
 [chat.compaction]
 mode = "deterministic"              # "deterministic" | "recency_preserving" | "structured" | "llm_replace"
-threshold_percent = 0.75            # Auto-compact trigger AND tail-budget multiplier. See below.
+threshold_percent = 0.95            # Auto-compact trigger AND tail-budget multiplier. See below.
 protect_head = 3                    # Head messages kept verbatim (recency/structured).
 protect_tail_min = 20               # Minimum tail messages kept verbatim (recency/structured).
 tail_budget_ratio = 0.20            # Tail size as fraction of threshold_percent × context_window.
@@ -200,12 +200,14 @@ used. `deterministic` mode ignores every field except `mode` and
 
 1. **Auto-compact trigger.** When the estimated next request would
    exceed `threshold_percent × context_window` tokens, `send()` fires a
-   compaction pre-emptively. On a 200 K model with the default `0.75`,
-   compaction starts when the session reaches 150 K tokens.
+   compaction pre-emptively. On a 200 K model with the default `0.95`,
+   compaction starts when the session reaches 190 K tokens. (The
+   default matches the pre-PR-#653 hardcoded trigger so upgrades are
+   behaviour-neutral.)
 2. **Tail-budget multiplier.** For `recency_preserving` and `structured`
    modes, the size of the verbatim tail is
    `threshold_percent × tail_budget_ratio × context_window`. With the
-   defaults that's 200 K × 0.75 × 0.20 = 30 K tokens of tail preserved.
+   defaults that's 200 K × 0.95 × 0.20 = 38 K tokens of tail preserved.
 
 Both uses move together: lowering `threshold_percent` compacts earlier
 **and** shrinks the preserved tail, which is usually what you want on a

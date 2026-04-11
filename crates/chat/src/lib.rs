@@ -3786,8 +3786,9 @@ impl ChatService for LiveChatService {
         // Auto-compact when the next request is likely to exceed
         // `chat.compaction.threshold_percent` of the model context window.
         // The value is clamped to the 0.1–0.95 range in case config
-        // validation missed a typo; the default (0.75) is loaded via
-        // load_prompt_persona_for_agent for the session's agent.
+        // validation missed a typo; the default (0.95) is loaded via
+        // load_prompt_persona_for_agent for the session's agent and
+        // matches the pre-PR-#653 hardcoded trigger.
         let compaction_cfg = &load_prompt_persona_for_agent(&session_agent_id)
             .config
             .chat
@@ -11219,8 +11220,8 @@ mod tests {
 
     #[test]
     fn compute_auto_compact_threshold_honors_configured_fraction() {
-        // Default: 0.75 × 200K = 150K.
-        assert_eq!(compute_auto_compact_threshold(200_000, 0.75), 150_000);
+        // Default: 0.95 × 200K = 190K. Matches the pre-PR-#653 trigger.
+        assert_eq!(compute_auto_compact_threshold(200_000, 0.95), 190_000);
         // Aggressive: 0.5 × 200K = 100K, catching auto-compact earlier.
         assert_eq!(compute_auto_compact_threshold(200_000, 0.5), 100_000);
     }

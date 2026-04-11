@@ -1165,7 +1165,7 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
             category: "invalid-value",
             path: "chat.compaction.threshold_percent".into(),
             message: format!(
-                "chat.compaction.threshold_percent = {} is outside the supported 0.1–0.95 range; the default (0.75) will be used",
+                "chat.compaction.threshold_percent = {} is outside the supported 0.1–0.95 range; the default (0.95) will be used",
                 compaction.threshold_percent
             ),
         });

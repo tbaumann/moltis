@@ -1634,7 +1634,11 @@ pub struct CompactionConfig {
     /// whatever's there).
     ///
     /// The clamp range is `0.1` – `0.95`; out-of-range values log a
-    /// validation warning and fall back to the default. Default: `0.75`.
+    /// validation warning and fall back to the default. Default: `0.95`
+    /// to match the pre-PR-#653 hardcoded auto-compact trigger so
+    /// upgrades are behaviour-neutral. Users who want earlier
+    /// compaction (at the cost of more frequent LLM calls in
+    /// `structured` / `llm_replace` modes) should lower this explicitly.
     #[serde(default = "default_compaction_threshold")]
     pub threshold_percent: f32,
 
@@ -1650,8 +1654,9 @@ pub struct CompactionConfig {
 
     /// Size of the tail protection window as a fraction of
     /// `threshold_percent × context_window`. For example, on a 200K model
-    /// with `threshold_percent = 0.75` and `tail_budget_ratio = 0.20`,
-    /// the tail keeps up to 30 000 tokens verbatim. Default: `0.20`.
+    /// with the defaults (`threshold_percent = 0.95`,
+    /// `tail_budget_ratio = 0.20`) the tail keeps up to 38 000 tokens
+    /// verbatim. Default: `0.20`.
     #[serde(default = "default_compaction_tail_ratio")]
     pub tail_budget_ratio: f32,
 
@@ -1694,7 +1699,11 @@ pub struct CompactionConfig {
 }
 
 fn default_compaction_threshold() -> f32 {
-    0.75
+    // Matches the pre-PR-#653 hardcoded auto-compact trigger of 95 % of
+    // the context window so existing deploys see no change in trigger
+    // behaviour when they upgrade. Users who want earlier compaction
+    // should lower this explicitly in moltis.toml.
+    0.95
 }
 
 fn default_compaction_protect_head() -> u32 {

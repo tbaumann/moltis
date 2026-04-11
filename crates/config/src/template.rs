@@ -247,14 +247,15 @@ message_queue_mode = "followup"   # Default: process queued messages one-by-one 
 #
 [chat.compaction]
 mode = "deterministic"              # "deterministic" | "recency_preserving" | "structured" | "llm_replace"
-# threshold_percent = 0.75          # Fires auto-compaction when the next request is estimated to exceed
+# threshold_percent = 0.95          # Fires auto-compaction when the next request is estimated to exceed
                                     # this fraction of the model context window. Also multiplied into
                                     # the verbatim tail budget for recency_preserving / structured modes.
-                                    # Range: 0.10–0.95. Lower = more aggressive compaction.
+                                    # Default matches the pre-PR-#653 hardcoded trigger so upgrades are
+                                    # behaviour-neutral. Range: 0.10–0.95. Lower = more aggressive compaction.
 # protect_head = 3                  # Number of leading messages kept verbatim by recency/structured modes.
 # protect_tail_min = 20             # Floor for tail messages kept verbatim (recency/structured modes).
 # tail_budget_ratio = 0.20          # Size of the verbatim tail as a fraction of threshold_percent × context_window.
-                                    # Example: 200K context × 0.75 × 0.20 = 30K tokens of tail preserved.
+                                    # Example (defaults): 200K context × 0.95 × 0.20 = 38K tokens of tail preserved.
 # tool_prune_char_threshold = 200   # Tool-result content longer than this is replaced with a placeholder
                                     # when recency/structured modes prune the middle region.
 # summary_model = "openrouter/google/gemini-2.5-flash"  # RESERVED — auxiliary-model subsystem not yet wired
