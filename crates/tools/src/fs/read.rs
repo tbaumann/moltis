@@ -20,8 +20,8 @@ use crate::{
     Result,
     error::Error,
     fs::shared::{
-        DEFAULT_MAX_READ_BYTES, DEFAULT_READ_LINE_LIMIT, canonicalize_existing,
-        ensure_regular_file, format_numbered_lines, looks_binary,
+        DEFAULT_MAX_READ_BYTES, DEFAULT_READ_LINE_LIMIT, FsErrorKind, format_numbered_lines,
+        fs_error_payload, io_error_to_typed_payload, looks_binary, require_absolute,
     },
 };
 
@@ -37,20 +37,54 @@ impl ReadTool {
 
     #[instrument(skip(self), fields(file_path = %file_path))]
     async fn read_impl(&self, file_path: &str, offset: usize, limit: usize) -> Result<Value> {
-        let canonical = canonicalize_existing(file_path).await?;
-        let size = ensure_regular_file(&canonical).await?;
+        require_absolute(file_path, "file_path")?;
 
-        if size > DEFAULT_MAX_READ_BYTES {
-            return Err(Error::message(format!(
-                "file is too large ({:.1} MB) — maximum is {:.0} MB",
-                size as f64 / (1024.0 * 1024.0),
-                DEFAULT_MAX_READ_BYTES as f64 / (1024.0 * 1024.0),
-            )));
+        // Stat first so we can surface not_found / permission_denied as
+        // typed Ok payloads rather than Err strings. The chat loop strips
+        // Err detail via err.to_string(); typed payloads survive as JSON.
+        let meta = match fs::metadata(file_path).await {
+            Ok(m) => m,
+            Err(e) => {
+                if let Some(payload) = io_error_to_typed_payload(&e, file_path) {
+                    return Ok(payload);
+                }
+                return Err(Error::message(format!("cannot stat '{file_path}': {e}")));
+            },
+        };
+
+        if !meta.is_file() {
+            return Ok(fs_error_payload(
+                FsErrorKind::NotRegularFile,
+                file_path,
+                "path is not a regular file",
+                None,
+            ));
         }
 
-        let bytes = fs::read(&canonical)
-            .await
-            .map_err(|e| Error::message(format!("failed to read '{file_path}': {e}")))?;
+        let size = meta.len();
+        if size > DEFAULT_MAX_READ_BYTES {
+            return Ok(json!({
+                "kind": FsErrorKind::TooLarge.as_str(),
+                "file_path": file_path,
+                "error": format!(
+                    "file is too large ({:.1} MB) — maximum is {:.0} MB",
+                    size as f64 / (1024.0 * 1024.0),
+                    DEFAULT_MAX_READ_BYTES as f64 / (1024.0 * 1024.0),
+                ),
+                "bytes": size,
+                "max_bytes": DEFAULT_MAX_READ_BYTES,
+            }));
+        }
+
+        let bytes = match fs::read(file_path).await {
+            Ok(b) => b,
+            Err(e) => {
+                if let Some(payload) = io_error_to_typed_payload(&e, file_path) {
+                    return Ok(payload);
+                }
+                return Err(Error::message(format!("failed to read '{file_path}': {e}")));
+            },
+        };
 
         if looks_binary(&bytes) {
             #[cfg(feature = "metrics")]
@@ -62,7 +96,7 @@ impl ReadTool {
             .increment(1);
             return Ok(json!({
                 "kind": "binary",
-                "file_path": canonical.to_string_lossy(),
+                "file_path": file_path,
                 "bytes": bytes.len(),
                 "message": "file appears to be binary; content not returned",
             }));
@@ -88,7 +122,7 @@ impl ReadTool {
 
         Ok(json!({
             "kind": "text",
-            "file_path": canonical.to_string_lossy(),
+            "file_path": file_path,
             "content": rendered.text,
             "total_lines": rendered.total_lines,
             "start_line": rendered.start_line,
@@ -234,24 +268,83 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_missing_file_errors() {
+    async fn read_missing_file_returns_typed_not_found() {
         let tool = ReadTool::new();
-        let err = tool
+        let value = tool
             .execute(json!({ "file_path": "/tmp/does-not-exist-read-test-xyz-123" }))
             .await
-            .unwrap_err();
-        assert!(err.to_string().contains("cannot resolve path"));
+            .unwrap();
+        assert_eq!(value["kind"], "not_found");
+        assert_eq!(value["file_path"], "/tmp/does-not-exist-read-test-xyz-123");
     }
 
     #[tokio::test]
-    async fn read_rejects_directory() {
+    async fn read_directory_returns_typed_not_regular_file() {
         let dir = tempfile::tempdir().unwrap();
         let tool = ReadTool::new();
-        let err = tool
+        let value = tool
             .execute(json!({ "file_path": dir.path().to_str().unwrap() }))
             .await
+            .unwrap();
+        assert_eq!(value["kind"], "not_regular_file");
+    }
+
+    #[tokio::test]
+    async fn read_too_large_returns_typed_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.bin");
+        let f = std::fs::File::create(&path).unwrap();
+        // One byte past the cap.
+        f.set_len(DEFAULT_MAX_READ_BYTES + 1).unwrap();
+
+        let tool = ReadTool::new();
+        let value = tool
+            .execute(json!({ "file_path": path.to_str().unwrap() }))
+            .await
+            .unwrap();
+        assert_eq!(value["kind"], "too_large");
+        assert!(value["bytes"].as_u64().unwrap() > DEFAULT_MAX_READ_BYTES);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_permission_denied_returns_typed_payload() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secret.txt");
+        fs::write(&path, "secret").await.unwrap();
+        let mut perms = fs::metadata(&path).await.unwrap().permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&path, perms).await.unwrap();
+
+        let tool = ReadTool::new();
+        let value = tool
+            .execute(json!({ "file_path": path.to_str().unwrap() }))
+            .await
+            .unwrap();
+
+        // Root bypasses permission checks; tolerate either typed error
+        // or a successful text read so the test is CI-safe.
+        let kind = value["kind"].as_str().unwrap();
+        assert!(
+            kind == "permission_denied" || kind == "text",
+            "unexpected kind: {kind}"
+        );
+
+        // Restore perms so tempdir cleanup works.
+        let mut restore = fs::metadata(&path).await.unwrap().permissions();
+        restore.set_mode(0o644);
+        let _ = fs::set_permissions(&path, restore).await;
+    }
+
+    #[tokio::test]
+    async fn read_relative_path_errors() {
+        let tool = ReadTool::new();
+        let err = tool
+            .execute(json!({ "file_path": "relative.txt" }))
+            .await
             .unwrap_err();
-        assert!(err.to_string().contains("not a regular file"));
+        assert!(err.to_string().contains("must be an absolute path"));
     }
 
     #[tokio::test]

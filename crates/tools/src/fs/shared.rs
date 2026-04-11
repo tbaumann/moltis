@@ -5,11 +5,87 @@
 //! contents back to the LLM.
 
 use {
-    std::path::{Path, PathBuf},
+    serde_json::{Value, json},
+    std::{
+        io,
+        path::{Path, PathBuf},
+    },
     tokio::fs,
 };
 
 use crate::{Result, error::Error};
+
+/// Typed error kinds that fs tools surface to the LLM as structured `Ok`
+/// payloads rather than plain `Err` strings.
+///
+/// These are the expected failure modes the issue (moltis-org/moltis#657)
+/// asks for: *"structured response for binary / nonexistent / permission-
+/// denied"*. Returning them as `Ok(value_with_kind_field)` means the chat
+/// loop's `err.to_string()` conversion doesn't strip the structure — the
+/// LLM sees the typed JSON directly and can branch on `kind`.
+///
+/// Internal / unexpected failures (I/O mid-read, spawn_blocking crash,
+/// etc.) still propagate as `Err` — this enum is strictly for anticipated
+/// user-visible error conditions.
+pub enum FsErrorKind {
+    NotFound,
+    PermissionDenied,
+    TooLarge,
+    NotRegularFile,
+}
+
+impl FsErrorKind {
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotFound => "not_found",
+            Self::PermissionDenied => "permission_denied",
+            Self::TooLarge => "too_large",
+            Self::NotRegularFile => "not_regular_file",
+        }
+    }
+}
+
+/// Build a typed error `Value` payload the LLM can branch on.
+///
+/// Shape: `{ "kind": "<kind>", "file_path": "...", "error": "...", "detail": "..." }`.
+/// `detail` carries the raw OS error when we have one, so operators
+/// looking at the LLM transcript can still diagnose the underlying cause.
+#[must_use]
+pub fn fs_error_payload(
+    kind: FsErrorKind,
+    file_path: &str,
+    error: &str,
+    detail: Option<&str>,
+) -> Value {
+    json!({
+        "kind": kind.as_str(),
+        "file_path": file_path,
+        "error": error,
+        "detail": detail.unwrap_or(""),
+    })
+}
+
+/// If `err` corresponds to an anticipated user-visible failure mode,
+/// return the typed payload. Otherwise return `None` so the caller can
+/// propagate as a real `Err` (unexpected I/O failure).
+#[must_use]
+pub fn io_error_to_typed_payload(err: &io::Error, file_path: &str) -> Option<Value> {
+    let (kind, message) = match err.kind() {
+        io::ErrorKind::NotFound => (FsErrorKind::NotFound, "file does not exist"),
+        io::ErrorKind::PermissionDenied => (
+            FsErrorKind::PermissionDenied,
+            "insufficient permissions to access file",
+        ),
+        _ => return None,
+    };
+    Some(fs_error_payload(
+        kind,
+        file_path,
+        message,
+        Some(&err.to_string()),
+    ))
+}
 
 /// Maximum file size the fs tools will read in a single call (phase 1 cap).
 ///
