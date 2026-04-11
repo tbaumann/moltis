@@ -484,12 +484,12 @@ impl BrowserPool {
                 },
                 Err(e) => {
                     last_error = e.to_string();
-                    warn!(
+                    debug!(
                         session_id,
                         ws_url = candidate,
                         browserless_api_version = %self.config.browserless_api_version,
                         error = %last_error,
-                        "failed to connect to sandboxed browser websocket candidate"
+                        "sandboxed browser websocket candidate failed, trying next"
                     );
                 },
             }
