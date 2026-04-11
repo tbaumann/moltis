@@ -253,9 +253,9 @@ pub fn compress_summary(text: &str) -> String {
 
     for line in deduped {
         let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
+        if trimmed == "<summary>" || trimmed == "</summary>" || trimmed.starts_with('#') {
             headers.push(line);
-        } else if trimmed.starts_with(['-', '*', '•']) {
+        } else if trimmed.starts_with(['-', '*', '\u{2022}']) {
             bullets.push(line);
         } else {
             other.push(line);
@@ -1240,6 +1240,40 @@ mod tests {
         assert!(
             result.len() <= 160,
             "single long line should be truncated, got {} chars",
+            result.len()
+        );
+    }
+
+    #[test]
+    fn compress_summary_protects_summary_tags_under_budget_pressure() {
+        // Build a summary that exceeds the 1200-char budget due to timeline entries.
+        // Timeline alone can reach 8 entries × ~160 chars ≈ 1280 chars.
+        let mut lines = vec!["<summary>".to_string(), "Conversation summary:".to_string()];
+        lines.push("- Scope: 50 messages.".to_string());
+        lines.push("- Tools mentioned: exec, read_file, write_file.".to_string());
+        lines.push("- Key files referenced: src/main.rs, lib/core.ts.".to_string());
+        lines.push("- Key timeline:".to_string());
+        for i in 0..15 {
+            lines.push(format!(
+                "  - user: This is a long timeline entry number {i} with enough padding to push the total over budget"
+            ));
+        }
+        lines.push("</summary>".to_string());
+        let input = lines.join("\n");
+        assert!(input.len() > 1_200, "test input must exceed budget");
+
+        let result = compress_summary(&input);
+        assert!(
+            result.contains("<summary>"),
+            "opening <summary> tag must be preserved, got: {result}"
+        );
+        assert!(
+            result.contains("</summary>"),
+            "closing </summary> tag must be preserved, got: {result}"
+        );
+        assert!(
+            result.len() <= 1_200,
+            "result must fit within budget, got {} chars",
             result.len()
         );
     }
