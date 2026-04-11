@@ -270,8 +270,22 @@ impl ApprovalManager {
     /// Returns Ok(()) if the command can proceed, Err if denied.
     pub async fn check_command(&self, command: &str) -> Result<ApprovalAction> {
         // Safety floor: dangerous patterns force approval regardless of mode.
+        // In Off mode there is no human approver to gate on, so denying is the
+        // only safe outcome — otherwise the agent would hang on `NeedsApproval`
+        // forever in headless deployments (moltis-org/moltis#654 follow-up).
         if let Some(desc) = check_dangerous(command) {
             if !matches_allowlist(command, &self.allowlist) {
+                if self.mode == ApprovalMode::Off {
+                    warn!(
+                        command,
+                        pattern = %desc,
+                        "dangerous command denied in approval_mode=off",
+                    );
+                    return Err(Error::message(format!(
+                        "exec denied: dangerous command pattern '{desc}' (approval_mode=off): \
+                         {command}"
+                    )));
+                }
                 warn!(command, pattern = %desc, "dangerous command detected, forcing approval");
                 return Ok(ApprovalAction::NeedsApproval);
             }
@@ -699,13 +713,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_dangerous_forces_approval_when_mode_off() {
+    async fn test_dangerous_denied_when_mode_off() {
+        // In Off mode dangerous commands must be denied (not NeedsApproval),
+        // otherwise headless agents hang waiting for an approver that never
+        // arrives (moltis-org/moltis#654).
         let mgr = ApprovalManager {
             mode: ApprovalMode::Off,
             ..Default::default()
         };
-        let action = mgr.check_command("rm -rf /").await.unwrap();
-        assert_eq!(action, ApprovalAction::NeedsApproval);
+        let err = mgr
+            .check_command("rm -rf /")
+            .await
+            .expect_err("expected denial for dangerous command in off mode");
+        assert!(
+            err.to_string().contains("dangerous command pattern"),
+            "unexpected error message: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dangerous_denied_when_mode_off_full_security() {
+        // Full security level does not change the safety floor: dangerous
+        // commands are still denied in Off mode.
+        let mgr = ApprovalManager {
+            mode: ApprovalMode::Off,
+            security_level: SecurityLevel::Full,
+            ..Default::default()
+        };
+        let err = mgr
+            .check_command("git reset --hard")
+            .await
+            .expect_err("expected denial for dangerous command in off+full");
+        assert!(
+            err.to_string().contains("dangerous command pattern"),
+            "unexpected error message: {err}"
+        );
     }
 
     #[tokio::test]
