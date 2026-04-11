@@ -396,6 +396,20 @@ fn build_schema_map() -> KnownKeys {
                 ("workspace_file_max_chars", Leaf),
                 ("priority_models", Leaf),
                 ("allowed_models", Leaf),
+                (
+                    "compaction",
+                    Struct(HashMap::from([
+                        ("mode", Leaf),
+                        ("threshold_percent", Leaf),
+                        ("protect_head", Leaf),
+                        ("protect_tail_min", Leaf),
+                        ("tail_budget_ratio", Leaf),
+                        ("tool_prune_char_threshold", Leaf),
+                        ("summary_model", Leaf),
+                        ("max_summary_tokens", Leaf),
+                        ("show_settings_hint", Leaf),
+                    ])),
+                ),
             ])),
         ),
         (
@@ -1141,6 +1155,48 @@ fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut Vec<Diagnost
             path: "chat.workspace_file_max_chars".into(),
             message: "chat.workspace_file_max_chars is 0 — AGENTS.md and TOOLS.md will be empty in the prompt".into(),
         });
+    }
+
+    // Compaction config sanity.
+    let compaction = &config.chat.compaction;
+    if !(0.1..=0.95).contains(&compaction.threshold_percent) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            category: "invalid-value",
+            path: "chat.compaction.threshold_percent".into(),
+            message: format!(
+                "chat.compaction.threshold_percent = {} is outside the supported 0.1–0.95 range; the default (0.95) will be used",
+                compaction.threshold_percent
+            ),
+        });
+    }
+    if !(0.05..=0.80).contains(&compaction.tail_budget_ratio) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            category: "invalid-value",
+            path: "chat.compaction.tail_budget_ratio".into(),
+            message: format!(
+                "chat.compaction.tail_budget_ratio = {} is outside the supported 0.05–0.80 range; the default (0.20) will be used",
+                compaction.tail_budget_ratio
+            ),
+        });
+    }
+    if compaction.protect_head > 32 {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Warning,
+            category: "invalid-value",
+            path: "chat.compaction.protect_head".into(),
+            message: "chat.compaction.protect_head > 32 will leave little room for the compacted middle region on typical sessions".into(),
+        });
+    }
+    // All four CompactionMode variants are now implemented. Any future
+    // "not-implemented" markers would go here; leave the match explicit so
+    // adding a new variant forces a decision at compile time.
+    match compaction.mode {
+        crate::schema::CompactionMode::Deterministic
+        | crate::schema::CompactionMode::RecencyPreserving
+        | crate::schema::CompactionMode::Structured
+        | crate::schema::CompactionMode::LlmReplace => {},
     }
 
     if config.mcp.request_timeout_secs == 0 {
