@@ -727,20 +727,57 @@ function handleChatFinal(p, isActive, isChatPage, eventSession) {
 	moveFirstQueuedToChat();
 }
 
+// Shared debounce so the auto-compact path (which broadcasts both
+// `chat.compact done` from within ChatService::compact AND a wrapping
+// `auto_compact done` from the send() caller) renders the card exactly
+// once. Whichever event arrives first claims the render; the other is
+// a no-op within the debounce window.
+var COMPACT_CARD_DEBOUNCE_MS = 500;
+var lastCompactCardAt = new Map();
+
+function shouldRenderCompactCard(p) {
+	var key = p.sessionKey || "__active__";
+	var now = Date.now();
+	var previous = lastCompactCardAt.get(key) || 0;
+	if (now - previous < COMPACT_CARD_DEBOUNCE_MS) {
+		return false;
+	}
+	lastCompactCardAt.set(key, now);
+	return true;
+}
+
+function resetTokensAfterCompaction() {
+	S.setSessionTokens({ input: 0, output: 0 });
+	S.setSessionCurrentInputTokens(0);
+	updateTokenBar();
+}
+
 function handleChatAutoCompact(p, isActive, isChatPage) {
 	if (!(isActive && isChatPage)) return;
 	if (p.phase === "start") {
 		chatAddMsg("system", "Compacting conversation (context limit reached)\u2026");
 	} else if (p.phase === "done") {
 		if (S.chatMsgBox?.lastChild) S.chatMsgBox.removeChild(S.chatMsgBox.lastChild);
-		renderCompactCard(p);
-		S.setSessionTokens({ input: 0, output: 0 });
-		S.setSessionCurrentInputTokens(0);
-		updateTokenBar();
+		if (shouldRenderCompactCard(p)) {
+			renderCompactCard(p);
+		}
+		resetTokensAfterCompaction();
 	} else if (p.phase === "error") {
 		if (S.chatMsgBox?.lastChild) S.chatMsgBox.removeChild(S.chatMsgBox.lastChild);
 		chatAddMsg("error", `Auto-compact failed: ${p.error || "unknown error"}`);
 	}
+}
+
+// `chat.compact done` is emitted by ChatService::compact on every
+// compaction run (manual `/compact` RPCs AND the pre-emptive auto-
+// compact path). It carries the mode/tokens/settings metadata from
+// CompactionOutcome::broadcast_metadata() so the same card renders.
+function handleChatCompact(p, isActive, isChatPage) {
+	if (!(isActive && isChatPage)) return;
+	if (p.phase !== "done") return;
+	if (!shouldRenderCompactCard(p)) return;
+	renderCompactCard(p);
+	resetTokensAfterCompaction();
 }
 
 function retryDelayMsFromPayload(p) {
@@ -807,7 +844,7 @@ function handleChatError(p, isActive, isChatPage, eventSession) {
 			var btn = document.createElement("button");
 			btn.className = "provider-btn error-continue-btn";
 			btn.textContent = t("errors:chat.continue", "Continue");
-			btn.onclick = function () {
+			btn.onclick = () => {
 				btn.disabled = true;
 				btn.textContent = t("errors:chat.continuing", "Continuing...");
 				S.chatInput.value = t("errors:chat.continueMessage", "Please continue where you left off.");
@@ -982,6 +1019,7 @@ var chatHandlers = {
 	delta: handleChatDelta,
 	final: handleChatFinal,
 	auto_compact: handleChatAutoCompact,
+	compact: handleChatCompact,
 	retrying: handleChatRetrying,
 	error: handleChatError,
 	aborted: handleChatAborted,

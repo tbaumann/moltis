@@ -4559,6 +4559,12 @@ impl ChatService for LiveChatService {
         )
         .await;
 
+        // Notify any channel (Telegram, Discord, Matrix, WhatsApp, etc.)
+        // that has pending reply targets on this session, so channel
+        // users see "Conversation compacted (mode, tokens, hint)"
+        // alongside the web UI's compact card.
+        notify_channels_of_compaction(&self.state, &session_key, &outcome).await;
+
         self.session_store
             .replace_history(&session_key, compacted.clone())
             .await
@@ -6814,6 +6820,12 @@ async fn run_with_tools(
                     }
                     broadcast(state, "chat", payload, BroadcastOpts::default()).await;
 
+                    // Notify any channel (Telegram, Discord, Matrix,
+                    // WhatsApp, etc.) that has pending reply targets on
+                    // this session so channel users see the same mode +
+                    // token info as the web UI.
+                    notify_channels_of_compaction(state, session_key, &outcome).await;
+
                     // Reload compacted history and retry.
                     let compacted_history_raw = store.read(session_key).await.unwrap_or_default();
                     let mut compacted_chat = values_to_chat_messages(&compacted_history_raw);
@@ -7763,6 +7775,92 @@ fn format_channel_error_message(error_obj: &Value) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("Please try again.");
     format!("⚠️ {title}: {detail}")
+}
+
+/// Format a user-facing notice announcing that a session was compacted.
+///
+/// Shown verbatim to channel users (Telegram, Discord, WhatsApp, etc.) and
+/// kept short so small mobile clients don't wrap the whole thing. The
+/// settings hint is included so users know where to change the mode;
+/// the LLM retry path never sees this text.
+fn format_channel_compaction_notice(outcome: &compaction_run::CompactionOutcome) -> String {
+    let mode_label = match outcome.effective_mode {
+        moltis_config::CompactionMode::Deterministic => "Deterministic",
+        moltis_config::CompactionMode::RecencyPreserving => "Recency preserving",
+        moltis_config::CompactionMode::Structured => "Structured",
+        moltis_config::CompactionMode::LlmReplace => "LLM replace",
+    };
+    let total = outcome.total_tokens();
+    let token_line = if total == 0 {
+        "No LLM tokens used (deterministic strategy)".to_string()
+    } else {
+        format!(
+            "Used {total} tokens ({input} in + {output} out)",
+            total = total,
+            input = outcome.input_tokens,
+            output = outcome.output_tokens,
+        )
+    };
+    format!(
+        "🧹 Conversation compacted\n\
+         Mode: {mode_label}\n\
+         {token_line}\n\
+         {hint}",
+        mode_label = mode_label,
+        token_line = token_line,
+        hint = compaction_run::SETTINGS_HINT,
+    )
+}
+
+/// Send a silent "session compacted" notice to pending channel targets
+/// without draining them.
+///
+/// Mirrors [`send_retry_status_to_channels`]: the targets are *peeked*,
+/// not drained, so the in-flight agent run can still deliver its final
+/// reply to them afterward. Uses `send_text_silent` so the channel
+/// integration doesn't count it toward user-visible interactive replies
+/// (no TTS, no delivery receipts beyond the channel's own).
+async fn notify_channels_of_compaction(
+    state: &Arc<dyn ChatRuntime>,
+    session_key: &str,
+    outcome: &compaction_run::CompactionOutcome,
+) {
+    let targets = state.peek_channel_replies(session_key).await;
+    if targets.is_empty() {
+        return;
+    }
+
+    let Some(outbound) = state.channel_outbound() else {
+        return;
+    };
+
+    let message = format_channel_compaction_notice(outcome);
+    let mut tasks = Vec::with_capacity(targets.len());
+    for target in targets {
+        let outbound = Arc::clone(&outbound);
+        let message = message.clone();
+        let to = target.outbound_to().into_owned();
+        tasks.push(tokio::spawn(async move {
+            let reply_to = target.message_id.as_deref();
+            if let Err(e) = outbound
+                .send_text_silent(&target.account_id, &to, &message, reply_to)
+                .await
+            {
+                warn!(
+                    account_id = target.account_id,
+                    chat_id = target.chat_id,
+                    thread_id = target.thread_id.as_deref().unwrap_or("-"),
+                    "failed to send compaction notice to channel: {e}"
+                );
+            }
+        }));
+    }
+
+    for task in tasks {
+        if let Err(e) = task.await {
+            warn!(error = %e, "channel compaction notice task join failed");
+        }
+    }
 }
 
 /// Send a short retry status update to pending channel targets without draining
@@ -10325,6 +10423,53 @@ mod tests {
         });
         let msg = format_channel_error_message(&error_obj);
         assert_eq!(msg, "⚠️ Rate limited: Please wait and try again.");
+    }
+
+    #[test]
+    fn format_channel_compaction_notice_zero_tokens_for_deterministic_mode() {
+        let outcome = compaction_run::CompactionOutcome {
+            history: vec![],
+            effective_mode: moltis_config::CompactionMode::Deterministic,
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        let msg = format_channel_compaction_notice(&outcome);
+        assert!(msg.contains("🧹 Conversation compacted"));
+        assert!(msg.contains("Mode: Deterministic"));
+        assert!(msg.contains("No LLM tokens used"));
+        assert!(msg.contains("chat.compaction.mode"));
+    }
+
+    #[test]
+    fn format_channel_compaction_notice_shows_token_breakdown_for_llm_modes() {
+        let outcome = compaction_run::CompactionOutcome {
+            history: vec![],
+            effective_mode: moltis_config::CompactionMode::Structured,
+            input_tokens: 1_234,
+            output_tokens: 567,
+        };
+        let msg = format_channel_compaction_notice(&outcome);
+        assert!(msg.contains("Mode: Structured"));
+        assert!(
+            msg.contains("Used 1801 tokens (1234 in + 567 out)"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn format_channel_compaction_notice_surfaces_recency_preserving_fallback_honestly() {
+        // When Structured falls back to RecencyPreserving, the outcome's
+        // effective_mode reports what actually ran. The channel notice
+        // should show that the user's requested strategy didn't run.
+        let outcome = compaction_run::CompactionOutcome {
+            history: vec![],
+            effective_mode: moltis_config::CompactionMode::RecencyPreserving,
+            input_tokens: 0,
+            output_tokens: 0,
+        };
+        let msg = format_channel_compaction_notice(&outcome);
+        assert!(msg.contains("Mode: Recency preserving"));
+        assert!(msg.contains("No LLM tokens used"));
     }
 
     #[test]
