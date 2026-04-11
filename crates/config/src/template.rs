@@ -271,12 +271,19 @@ mode = "deterministic"              # "deterministic" | "recency_preserving" | "
                                     # footer without losing the mode + token metadata.
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SPAWN PRESETS (OPTIONAL)
+# SUB-AGENT SPAWN PRESETS (OPTIONAL)
 # ══════════════════════════════════════════════════════════════════════════════
-# Configure reusable presets for the `spawn_agent` tool.
+# Configure reusable presets for sub-agents spawned via the `spawn_agent` tool.
+#
+# ⚠️  SCOPE: `[agents.presets.*]` applies ONLY to sub-agents spawned via the
+# `spawn_agent` tool. The `tools.allow` / `tools.deny` fields under a preset
+# do NOT filter tools for the main agent session. To allow/deny tools for the
+# main session, use the `[tools.policy]` section further down this file.
+# `[agents] default_preset` likewise only selects the sub-agent preset used
+# when `spawn_agent.preset` is omitted — it does not apply to the main session.
 #
 # [agents]
-# default_preset = "research"      # Optional: used when spawn_agent.preset is omitted
+# default_preset = "research"      # Sub-agent preset used when spawn_agent.preset is omitted
 #
 # [agents.presets.research]
 # model = "openai/gpt-5.2"
@@ -453,7 +460,12 @@ packages = [
 # pids_max = 100                  # Maximum number of processes
 
 # ── Tool Policy ───────────────────────────────────────────────────────────────
-# Control which tools agents can use.
+# Control which tools the MAIN agent session can use.
+#
+# This is the tool policy for the main session. Preset tool policies under
+# `[agents.presets.*]` apply only to sub-agents spawned via `spawn_agent` and
+# are NOT read by the main session. If you want a deny list to harden the
+# main agent, it must live here.
 
 [tools.policy]
 allow = []                        # Tools to always allow (e.g., ["exec", "web_fetch"])
