@@ -1,25 +1,28 @@
 //! `Grep` tool — regex content search across files.
 //!
 //! Walks the target with `ignore::WalkBuilder` (respects `.gitignore`),
-//! applies an optional `glob` file filter, and searches each file with the
-//! `regex` crate. Supports three output modes mirroring Claude Code / rg:
+//! applies an optional `glob` file filter, and searches each file with
+//! ripgrep's `grep-regex`/`grep-searcher` crates. Supports three output
+//! modes mirroring Claude Code / rg:
 //!
 //! - `content` — matching lines with optional line numbers and context.
 //! - `files_with_matches` (default) — just the paths of files that matched.
 //! - `count` — match count per file.
 //!
-//! We use the `regex` crate rather than shelling out to `rg` so the tool runs
-//! in-process, returns structured results, and honors the same policy layer
-//! as every other native tool.
+//! We keep search in-process so the tool returns structured results and
+//! honors the same policy layer as every other native tool.
 
 use {
     async_trait::async_trait,
     globset::{Glob as GlobPattern, GlobMatcher},
+    grep_matcher::Matcher,
+    grep_regex::RegexMatcherBuilder,
+    grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch},
     ignore::WalkBuilder,
     moltis_agents::tool_registry::AgentTool,
-    regex::RegexBuilder,
     serde_json::{Value, json},
     std::{
+        io,
         path::{Path, PathBuf},
         sync::Arc,
     },
@@ -144,13 +147,6 @@ impl GrepTool {
 
     #[instrument(skip(self, opts), fields(pattern = %opts.pattern, mode = ?opts.output_mode))]
     fn grep_impl(&self, opts: GrepOptions) -> Result<Value> {
-        let regex = RegexBuilder::new(&opts.pattern)
-            .case_insensitive(opts.case_insensitive)
-            .multi_line(opts.multiline)
-            .dot_matches_new_line(opts.multiline)
-            .build()
-            .map_err(|e| Error::message(format!("invalid regex '{}': {e}", opts.pattern)))?;
-
         let root_canonical = std::fs::canonicalize(&opts.path).map_err(|e| {
             Error::message(format!(
                 "cannot resolve grep path '{}': {e}",
@@ -216,105 +212,162 @@ impl GrepTool {
         // Sort files for deterministic output.
         files.sort();
 
+        let matcher = build_matcher(&opts)?;
+
         match opts.output_mode {
-            OutputMode::FilesWithMatches => {
-                let mut matched: Vec<String> = Vec::new();
-                for path in &files {
-                    if let Some(bytes) = read_bounded(path)
-                        && let Ok(text) = std::str::from_utf8(&bytes)
-                        && regex.is_match(text)
-                    {
-                        matched.push(path.to_string_lossy().into_owned());
-                    }
-                }
-                let (rows, truncated) = apply_head_offset(matched, opts.offset, opts.head_limit);
-                Ok(json!({
-                    "mode": "files_with_matches",
-                    "files": rows,
-                    "truncated": truncated,
-                }))
-            },
-            OutputMode::Count => {
-                let mut counts: Vec<Value> = Vec::new();
-                for path in &files {
-                    let Some(bytes) = read_bounded(path) else {
-                        continue;
-                    };
-                    let Ok(text) = std::str::from_utf8(&bytes) else {
-                        continue;
-                    };
-                    let count = regex.find_iter(text).count();
-                    if count > 0 {
-                        counts.push(json!({
-                            "path": path.to_string_lossy(),
-                            "count": count,
-                        }));
-                    }
-                }
-                let (rows, truncated) = apply_head_offset(counts, opts.offset, opts.head_limit);
-                Ok(json!({
-                    "mode": "count",
-                    "counts": rows,
-                    "truncated": truncated,
-                }))
-            },
-            OutputMode::Content => {
-                let mut rows: Vec<Value> = Vec::new();
-                'outer: for path in &files {
-                    let Some(bytes) = read_bounded(path) else {
-                        continue;
-                    };
-                    let Ok(text) = std::str::from_utf8(&bytes) else {
-                        continue;
-                    };
-                    let file_rows = collect_content_matches(
-                        path,
-                        text,
-                        &regex,
-                        opts.show_line_numbers,
-                        opts.before_context,
-                        opts.after_context,
-                    );
-                    for row in file_rows {
-                        if rows.len() >= DEFAULT_GREP_MATCH_CAP {
-                            break 'outer;
-                        }
-                        rows.push(row);
-                    }
-                }
-                let (rows, truncated) = apply_head_offset(rows, opts.offset, opts.head_limit);
-                Ok(json!({
-                    "mode": "content",
-                    "matches": rows,
-                    "truncated": truncated,
-                }))
-            },
+            OutputMode::FilesWithMatches => grep_files_with_matches(&matcher, &files, &opts),
+            OutputMode::Count => grep_count_matches(&matcher, &files, &opts),
+            OutputMode::Content => grep_content_matches(&matcher, &files, &opts),
         }
     }
 }
 
-fn read_bounded(path: &Path) -> Option<Vec<u8>> {
+fn build_matcher(opts: &GrepOptions) -> Result<grep_regex::RegexMatcher> {
+    let mut builder = RegexMatcherBuilder::new();
+    builder
+        .case_insensitive(opts.case_insensitive)
+        .multi_line(opts.multiline)
+        .dot_matches_new_line(opts.multiline)
+        .ban_byte(Some(0));
+
+    if !opts.multiline {
+        builder.line_terminator(Some(b'\n'));
+    }
+
+    builder
+        .build(&opts.pattern)
+        .map_err(|e| Error::message(format!("invalid regex '{}': {e}", opts.pattern)))
+}
+
+fn read_bounded(path: &Path) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
     if meta.len() > DEFAULT_GREP_FILE_CAP {
         return None;
     }
-    std::fs::read(path).ok()
+    let bytes = std::fs::read(path).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+fn build_searcher(multiline: bool, line_numbers: bool, max_matches: Option<u64>) -> Searcher {
+    let mut builder = SearcherBuilder::new();
+    builder
+        .binary_detection(BinaryDetection::quit(0))
+        .line_number(line_numbers)
+        .max_matches(max_matches);
+    if multiline {
+        builder.multi_line(true);
+    }
+    builder.build()
+}
+
+fn grep_files_with_matches(
+    matcher: &grep_regex::RegexMatcher,
+    files: &[PathBuf],
+    opts: &GrepOptions,
+) -> Result<Value> {
+    let mut searcher = build_searcher(opts.multiline, false, Some(1));
+    let mut matched: Vec<String> = Vec::new();
+
+    for path in files {
+        let mut sink = FirstMatchSink::default();
+        if searcher.search_path(matcher, path, &mut sink).is_ok() && sink.found {
+            matched.push(path.to_string_lossy().into_owned());
+        }
+    }
+
+    let (rows, truncated) = apply_head_offset(matched, opts.offset, opts.head_limit);
+    Ok(json!({
+        "mode": "files_with_matches",
+        "files": rows,
+        "truncated": truncated,
+    }))
+}
+
+fn grep_count_matches(
+    matcher: &grep_regex::RegexMatcher,
+    files: &[PathBuf],
+    opts: &GrepOptions,
+) -> Result<Value> {
+    let mut searcher = build_searcher(opts.multiline, false, None);
+    let mut counts: Vec<Value> = Vec::new();
+
+    for path in files {
+        let mut sink = CountMatchesSink::new(matcher);
+        if searcher.search_path(matcher, path, &mut sink).is_ok() && sink.count > 0 {
+            counts.push(json!({
+                "path": path.to_string_lossy(),
+                "count": sink.count,
+            }));
+        }
+    }
+
+    let (rows, truncated) = apply_head_offset(counts, opts.offset, opts.head_limit);
+    Ok(json!({
+        "mode": "count",
+        "counts": rows,
+        "truncated": truncated,
+    }))
+}
+
+fn grep_content_matches(
+    matcher: &grep_regex::RegexMatcher,
+    files: &[PathBuf],
+    opts: &GrepOptions,
+) -> Result<Value> {
+    // Keep content mode line-oriented so each row still corresponds to one
+    // concrete line with a local context block.
+    let mut searcher = build_searcher(false, true, None);
+    let mut rows: Vec<Value> = Vec::new();
+    let mut cap_hit = false;
+
+    'outer: for path in files {
+        let mut sink = MatchingLineNumbersSink::default();
+        if searcher.search_path(matcher, path, &mut sink).is_err() || sink.line_numbers.is_empty() {
+            continue;
+        }
+        let Some(text) = read_bounded(path) else {
+            continue;
+        };
+        let file_rows = collect_content_matches(
+            path,
+            &text,
+            &sink.line_numbers,
+            opts.show_line_numbers,
+            opts.before_context,
+            opts.after_context,
+        );
+        for row in file_rows {
+            if rows.len() >= DEFAULT_GREP_MATCH_CAP {
+                cap_hit = true;
+                break 'outer;
+            }
+            rows.push(row);
+        }
+    }
+
+    let (rows, paging_truncated) = apply_head_offset(rows, opts.offset, opts.head_limit);
+    Ok(json!({
+        "mode": "content",
+        "matches": rows,
+        "truncated": cap_hit || paging_truncated,
+    }))
 }
 
 fn collect_content_matches(
     path: &Path,
     text: &str,
-    regex: &regex::Regex,
+    line_numbers: &[usize],
     show_line_numbers: bool,
     before: usize,
     after: usize,
 ) -> Vec<Value> {
     let lines: Vec<&str> = text.lines().collect();
     let mut rows: Vec<Value> = Vec::new();
-    for (idx, line) in lines.iter().enumerate() {
-        if !regex.is_match(line) {
+    for &line_number in line_numbers {
+        let idx = line_number.saturating_sub(1);
+        let Some(line) = lines.get(idx) else {
             continue;
-        }
+        };
         let start = idx.saturating_sub(before);
         let end = (idx + after + 1).min(lines.len());
         let block: Vec<String> = lines[start..end]
@@ -354,10 +407,80 @@ fn apply_head_offset<T: Clone>(
     (capped.to_vec(), truncated)
 }
 
-/// Map a `type` filter to a single grep `--include` glob. Returns
-/// `None` when the type doesn't map to a simple one-extension glob —
-/// the caller then falls back to no include filter and grep scans
-/// everything.
+#[derive(Default)]
+struct FirstMatchSink {
+    found: bool,
+}
+
+impl Sink for FirstMatchSink {
+    type Error = io::Error;
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        _mat: &SinkMatch<'_>,
+    ) -> std::result::Result<bool, Self::Error> {
+        self.found = true;
+        Ok(false)
+    }
+}
+
+struct CountMatchesSink<'a, M> {
+    matcher: &'a M,
+    count: usize,
+}
+
+impl<'a, M> CountMatchesSink<'a, M> {
+    fn new(matcher: &'a M) -> Self {
+        Self { matcher, count: 0 }
+    }
+}
+
+impl<M> Sink for CountMatchesSink<'_, M>
+where
+    M: Matcher,
+{
+    type Error = io::Error;
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        mat: &SinkMatch<'_>,
+    ) -> std::result::Result<bool, Self::Error> {
+        self.matcher
+            .find_iter(mat.bytes(), |m| {
+                let _ = m;
+                self.count += 1;
+                true
+            })
+            .map_err(|err| io::Error::other(err.to_string()))?;
+        Ok(true)
+    }
+}
+
+#[derive(Default)]
+struct MatchingLineNumbersSink {
+    line_numbers: Vec<usize>,
+}
+
+impl Sink for MatchingLineNumbersSink {
+    type Error = io::Error;
+
+    fn matched(
+        &mut self,
+        _searcher: &Searcher,
+        mat: &SinkMatch<'_>,
+    ) -> std::result::Result<bool, Self::Error> {
+        if let Some(line_number) = mat.line_number() {
+            self.line_numbers.push(line_number as usize);
+        }
+        Ok(true)
+    }
+}
+
+/// Map a `type` filter to the grep `--include` globs that cover that
+/// language family. Unknown types return an empty list, which means the
+/// caller falls back to no include filter.
 fn type_to_include_globs(ty: &str) -> &'static [&'static str] {
     match ty {
         "rust" => &["*.rs"],
@@ -704,6 +827,28 @@ mod tests {
         let value = tool
             .execute(json!({
                 "pattern": "fn ",
+                "path": dir.path().to_str().unwrap(),
+                "output_mode": "count",
+            }))
+            .await
+            .unwrap();
+
+        let counts = value["counts"].as_array().unwrap();
+        assert_eq!(counts.len(), 1);
+        assert_eq!(counts[0]["count"], 3);
+    }
+
+    #[tokio::test]
+    async fn grep_count_mode_counts_multiple_occurrences_on_one_line() {
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("dups.txt"), "alpha alpha alpha\n")
+            .await
+            .unwrap();
+
+        let tool = GrepTool::new();
+        let value = tool
+            .execute(json!({
+                "pattern": "alpha",
                 "path": dir.path().to_str().unwrap(),
                 "output_mode": "count",
             }))

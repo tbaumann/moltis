@@ -10,7 +10,7 @@ firecrawl     = []
 # Native filesystem tools (Read, Write, Edit, MultiEdit, Glob, Grep).
 # See moltis-org/moltis#657. Default-on; build with
 # --no-default-features to omit them from minimal builds.
-fs-tools      = ["dep:globset", "dep:ignore"]
+fs-tools      = ["dep:globset", "dep:grep-matcher", "dep:grep-regex", "dep:grep-searcher", "dep:ignore"]
 metrics       = ["dep:moltis-metrics"]
 wasm          = ["dep:shell-words", "dep:wasmtime", "dep:wasmtime-wasi", "wasmtime/component-model"]
 
@@ -21,6 +21,9 @@ base64                = { workspace = true }
 bytes                 = { workspace = true }
 futures               = { workspace = true }
 globset               = { optional = true, workspace = true }
+grep-matcher          = { optional = true, workspace = true }
+grep-regex            = { optional = true, workspace = true }
+grep-searcher         = { optional = true, workspace = true }
 html2text             = { workspace = true }
 ignore                = { optional = true, workspace = true }
 image                 = { workspace = true }
