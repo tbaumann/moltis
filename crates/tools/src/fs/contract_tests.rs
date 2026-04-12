@@ -595,6 +595,14 @@ async fn adaptive_read_cap_shrinks_output_for_small_context_window() {
 
     assert_eq!(value["kind"], "text");
     assert_eq!(value["truncated"], true);
+    let next_offset = value["next_offset"]
+        .as_u64()
+        .expect("truncated registry read should advertise next_offset");
+    assert!(next_offset > 1);
+    assert_eq!(
+        value["continuation_hint"],
+        format!("File output was truncated. Re-run Read with offset={next_offset} to continue.")
+    );
     let content_str = value["content"].as_str().unwrap();
     assert!(
         content_str.len() <= 50 * 1024,

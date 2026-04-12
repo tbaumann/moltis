@@ -14,7 +14,7 @@ pub(crate) mod pdf;
 use {
     async_trait::async_trait,
     moltis_agents::tool_registry::AgentTool,
-    serde_json::{Value, json},
+    serde_json::{Map, Value, json},
     std::{path::Path, sync::Arc},
     tokio::fs,
     tracing::instrument,
@@ -47,6 +47,53 @@ struct TextReadPage {
     start_line: usize,
     rendered_lines: usize,
     truncated: bool,
+}
+
+fn next_offset_for_text_read(
+    start_line: usize,
+    rendered_lines: usize,
+    total_lines: usize,
+    truncated: bool,
+) -> Option<usize> {
+    if !truncated || rendered_lines == 0 {
+        return None;
+    }
+
+    let next_offset = start_line.saturating_add(rendered_lines);
+    (next_offset <= total_lines).then_some(next_offset)
+}
+
+fn text_payload(
+    file_path: &str,
+    content: String,
+    total_lines: usize,
+    start_line: usize,
+    rendered_lines: usize,
+    truncated: bool,
+) -> Value {
+    let mut payload = Map::from_iter([
+        ("kind".to_string(), json!("text")),
+        ("file_path".to_string(), json!(file_path)),
+        ("content".to_string(), json!(content)),
+        ("total_lines".to_string(), json!(total_lines)),
+        ("start_line".to_string(), json!(start_line)),
+        ("rendered_lines".to_string(), json!(rendered_lines)),
+        ("truncated".to_string(), json!(truncated)),
+    ]);
+
+    if let Some(next_offset) =
+        next_offset_for_text_read(start_line, rendered_lines, total_lines, truncated)
+    {
+        payload.insert("next_offset".to_string(), json!(next_offset));
+        payload.insert(
+            "continuation_hint".to_string(),
+            json!(format!(
+                "File output was truncated. Re-run Read with offset={next_offset} to continue."
+            )),
+        );
+    }
+
+    Value::Object(payload)
 }
 
 /// Native `Read` tool implementation.
@@ -324,15 +371,14 @@ impl ReadTool {
             }
         }
 
-        Ok(json!({
-            "kind": "text",
-            "file_path": file_path,
-            "content": aggregated_content,
-            "total_lines": total_lines,
-            "start_line": start_line,
-            "rendered_lines": rendered_lines_total,
-            "truncated": truncated,
-        }))
+        Ok(text_payload(
+            file_path,
+            aggregated_content,
+            total_lines,
+            start_line,
+            rendered_lines_total,
+            truncated,
+        ))
     }
 
     /// Render raw file bytes into the typed Read payload.
@@ -416,15 +462,14 @@ impl ReadTool {
         )
         .increment(1);
 
-        let mut payload = json!({
-            "kind": "text",
-            "file_path": file_path,
-            "content": rendered.text,
-            "total_lines": rendered.total_lines,
-            "start_line": rendered.start_line,
-            "rendered_lines": rendered.rendered_lines,
-            "truncated": rendered.truncated,
-        });
+        let mut payload = text_payload(
+            file_path,
+            rendered.text,
+            rendered.total_lines,
+            rendered.start_line,
+            rendered.rendered_lines,
+            rendered.truncated,
+        );
 
         // Loop warning: the read was already recorded at the top of
         // this method. Check the consecutive count (which was bumped
@@ -671,6 +716,11 @@ mod tests {
         assert_eq!(value["rendered_lines"], 2);
         assert_eq!(value["start_line"], 3);
         assert_eq!(value["truncated"], true);
+        assert_eq!(value["next_offset"], 5);
+        assert_eq!(
+            value["continuation_hint"],
+            "File output was truncated. Re-run Read with offset=5 to continue."
+        );
         let content = value["content"].as_str().unwrap();
         assert!(content.contains("line 3"));
         assert!(content.contains("line 4"));
@@ -721,9 +771,41 @@ mod tests {
         assert_eq!(value["total_lines"], 3_000);
         assert_eq!(value["rendered_lines"], 100);
         assert_eq!(value["truncated"], true);
+        assert_eq!(value["next_offset"], 101);
+        assert_eq!(
+            value["continuation_hint"],
+            "File output was truncated. Re-run Read with offset=101 to continue."
+        );
         let content = value["content"].as_str().unwrap();
         assert!(content.contains("line 100"));
         assert!(!content.contains("line 101"));
+    }
+
+    #[tokio::test]
+    async fn read_auto_paged_truncation_exposes_next_offset() {
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        for i in 1..=2_000 {
+            writeln!(tmp, "{i:04}: {}", "x".repeat(120)).unwrap();
+        }
+
+        let tool = ReadTool::new().with_context_window_tokens(1);
+        let value = tool
+            .execute(json!({ "file_path": tmp.path().to_str().unwrap() }))
+            .await
+            .unwrap();
+
+        assert_eq!(value["kind"], "text");
+        assert_eq!(value["truncated"], true);
+        let next_offset = value["next_offset"]
+            .as_u64()
+            .expect("truncated auto-paged read should advertise next_offset");
+        assert!(next_offset > 1);
+        assert_eq!(
+            value["continuation_hint"],
+            format!(
+                "File output was truncated. Re-run Read with offset={next_offset} to continue."
+            )
+        );
     }
 
     #[tokio::test]
