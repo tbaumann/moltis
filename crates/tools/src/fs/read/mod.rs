@@ -27,7 +27,7 @@ use crate::{
     Result,
     error::Error,
     fs::{
-        sandbox_bridge::{SandboxReadResult, ensure_sandbox, sandbox_read},
+        sandbox_bridge::SandboxReadResult,
         shared::{
             BinaryPolicy, DEFAULT_MAX_READ_BYTES, DEFAULT_READ_LINE_LIMIT, FsErrorKind,
             FsPathPolicy, FsState, MAX_READ_OUTPUT_BYTES, READ_LOOP_THRESHOLD,
@@ -36,7 +36,7 @@ use crate::{
             require_absolute, session_key_from,
         },
     },
-    sandbox::SandboxRouter,
+    sandbox::{SandboxRouter, file_system::sandbox_file_system_for_session},
 };
 
 const MAX_AUTO_PAGED_READS: usize = 8;
@@ -201,9 +201,9 @@ impl ReadTool {
             {
                 return Ok(payload);
             }
-            let (backend, id) = ensure_sandbox(router, session_key).await?;
             let max = self.effective_max_read_bytes();
-            let result = sandbox_read(&backend, &id, file_path, max).await?;
+            let sandbox_fs = sandbox_file_system_for_session(router, session_key).await?;
+            let result = sandbox_fs.read_file(file_path, max).await?;
             match result {
                 SandboxReadResult::Ok(bytes) => {
                     return Ok(self.render_bytes_to_payload(

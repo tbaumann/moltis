@@ -22,16 +22,13 @@ use crate::{
     checkpoints::CheckpointManager,
     error::Error,
     exec::ApprovalBroadcaster,
-    fs::{
-        sandbox_bridge::{ensure_sandbox, sandbox_write},
-        shared::{
-            FsPathPolicy, FsState, canonicalize_for_create, enforce_must_read_before_write,
-            enforce_path_policy, host_mutation_queue_key, note_fs_mutation, reject_if_symlink,
-            require_absolute, require_fs_mutation_approval, sandbox_mutation_queue_key,
-            session_key_from, with_fs_mutation_lock,
-        },
+    fs::shared::{
+        FsPathPolicy, FsState, canonicalize_for_create, enforce_must_read_before_write,
+        enforce_path_policy, host_mutation_queue_key, note_fs_mutation, reject_if_symlink,
+        require_absolute, require_fs_mutation_approval, sandbox_mutation_queue_key,
+        session_key_from, with_fs_mutation_lock,
     },
-    sandbox::SandboxRouter,
+    sandbox::{SandboxRouter, file_system::sandbox_file_system_for_session},
 };
 
 /// Native `Write` tool implementation.
@@ -125,9 +122,9 @@ impl WriteTool {
                         &approval_request,
                     )
                     .await?;
-                    let (backend, id) = ensure_sandbox(router, session_key).await?;
+                    let sandbox_fs = sandbox_file_system_for_session(router, session_key).await?;
                     if let Some(payload) =
-                        sandbox_write(&backend, &id, file_path, content.as_bytes()).await?
+                        sandbox_fs.write_file(file_path, content.as_bytes()).await?
                     {
                         return Ok(payload);
                     }

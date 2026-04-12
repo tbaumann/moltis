@@ -24,7 +24,7 @@ use crate::{
     exec::ApprovalBroadcaster,
     fs::{
         edit::{apply_edit, persist_atomic},
-        sandbox_bridge::{SandboxReadResult, ensure_sandbox, sandbox_read, sandbox_write},
+        sandbox_bridge::SandboxReadResult,
         shared::{
             DEFAULT_MAX_READ_BYTES, FsPathPolicy, FsState, canonicalize_existing,
             enforce_must_read_before_write, enforce_path_policy, ensure_regular_file,
@@ -33,7 +33,7 @@ use crate::{
             with_fs_mutation_lock,
         },
     },
-    sandbox::SandboxRouter,
+    sandbox::{SandboxRouter, file_system::sandbox_file_system_for_session},
 };
 
 /// Native `MultiEdit` tool implementation.
@@ -127,9 +127,10 @@ impl MultiEditTool {
             return with_fs_mutation_lock(
                 sandbox_mutation_queue_key(session_key, file_path),
                 async {
-                    let (backend, id) = ensure_sandbox(router, session_key).await?;
-                    let read_result =
-                        sandbox_read(&backend, &id, file_path, DEFAULT_MAX_READ_BYTES).await?;
+                    let sandbox_fs = sandbox_file_system_for_session(router, session_key).await?;
+                    let read_result = sandbox_fs
+                        .read_file(file_path, DEFAULT_MAX_READ_BYTES)
+                        .await?;
                     let bytes = match read_result {
                         SandboxReadResult::Ok(bytes) => bytes,
                         other => {
@@ -169,7 +170,7 @@ impl MultiEditTool {
                     )
                     .await?;
                     if let Some(payload) =
-                        sandbox_write(&backend, &id, file_path, buffer.as_bytes()).await?
+                        sandbox_fs.write_file(file_path, buffer.as_bytes()).await?
                     {
                         return Ok(payload);
                     }

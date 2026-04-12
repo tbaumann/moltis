@@ -23,7 +23,7 @@ use crate::{
     error::Error,
     exec::ApprovalBroadcaster,
     fs::{
-        sandbox_bridge::{SandboxReadResult, ensure_sandbox, sandbox_read, sandbox_write},
+        sandbox_bridge::SandboxReadResult,
         shared::{
             DEFAULT_MAX_READ_BYTES, FsPathPolicy, FsState, canonicalize_existing,
             check_file_modified_since_read, enforce_must_read_before_write, enforce_path_policy,
@@ -32,7 +32,7 @@ use crate::{
             session_key_from, with_fs_mutation_lock,
         },
     },
-    sandbox::SandboxRouter,
+    sandbox::{SandboxRouter, file_system::sandbox_file_system_for_session},
 };
 
 /// Outcome of a successful [`apply_edit`] call.
@@ -317,9 +317,10 @@ impl EditTool {
             return with_fs_mutation_lock(
                 sandbox_mutation_queue_key(session_key, file_path),
                 async {
-                    let (backend, id) = ensure_sandbox(router, session_key).await?;
-                    let read_result =
-                        sandbox_read(&backend, &id, file_path, DEFAULT_MAX_READ_BYTES).await?;
+                    let sandbox_fs = sandbox_file_system_for_session(router, session_key).await?;
+                    let read_result = sandbox_fs
+                        .read_file(file_path, DEFAULT_MAX_READ_BYTES)
+                        .await?;
                     let bytes = match read_result {
                         SandboxReadResult::Ok(bytes) => bytes,
                         other => {
@@ -340,8 +341,9 @@ impl EditTool {
                         &approval_request,
                     )
                     .await?;
-                    if let Some(payload) =
-                        sandbox_write(&backend, &id, file_path, outcome.content.as_bytes()).await?
+                    if let Some(payload) = sandbox_fs
+                        .write_file(file_path, outcome.content.as_bytes())
+                        .await?
                     {
                         return Ok(payload);
                     }

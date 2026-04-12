@@ -26,11 +26,8 @@ use moltis_metrics::{counter, labels, tools as tools_metrics};
 use crate::{
     Result,
     error::Error,
-    fs::{
-        sandbox_bridge::{ensure_sandbox, sandbox_list_files},
-        shared::{FsPathPolicy, enforce_path_policy_deny_only, require_absolute, session_key_from},
-    },
-    sandbox::SandboxRouter,
+    fs::shared::{FsPathPolicy, enforce_path_policy_deny_only, require_absolute, session_key_from},
+    sandbox::{SandboxRouter, file_system::sandbox_file_system_for_session},
 };
 
 /// Maximum number of entries returned by a single `Glob` call.
@@ -276,11 +273,11 @@ impl AgentTool for GlobTool {
             {
                 return Ok(payload);
             }
-            let (backend, id) = ensure_sandbox(router, &session_key).await?;
             let root_str = root
                 .to_str()
                 .ok_or_else(|| Error::message("Glob 'path' contains invalid UTF-8"))?;
-            let files = sandbox_list_files(&backend, &id, root_str).await?;
+            let sandbox_fs = sandbox_file_system_for_session(router, &session_key).await?;
+            let files = sandbox_fs.list_files(root_str).await?;
             let matcher: GlobMatcher = GlobPattern::new(&pattern)
                 .map_err(|e| Error::message(format!("invalid glob pattern '{pattern}': {e}")))?
                 .compile_matcher();

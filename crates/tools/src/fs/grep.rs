@@ -36,10 +36,10 @@ use crate::{
     Result,
     error::Error,
     fs::{
-        sandbox_bridge::{SandboxGrepMode, SandboxGrepOptions, ensure_sandbox, sandbox_grep},
+        sandbox_bridge::{SandboxGrepMode, SandboxGrepOptions},
         shared::{FsPathPolicy, enforce_path_policy_deny_only, require_absolute, session_key_from},
     },
-    sandbox::SandboxRouter,
+    sandbox::{SandboxRouter, file_system::sandbox_file_system_for_session},
 };
 
 /// Maximum bytes of a single file we will load for content searching.
@@ -725,7 +725,6 @@ impl AgentTool for GrepTool {
                 {
                     return Ok(payload);
                 }
-                let (backend, id) = ensure_sandbox(router, &session_key).await?;
                 let path_str = path
                     .to_str()
                     .ok_or_else(|| Error::message("Grep 'path' contains invalid UTF-8"))?;
@@ -736,26 +735,30 @@ impl AgentTool for GrepTool {
                 };
                 // Map `type` to grep --include globs. `glob` takes
                 // precedence when both are set.
-                let include_globs: Vec<&str> = match params.get("glob").and_then(Value::as_str) {
-                    Some(g) => vec![g],
+                let include_globs: Vec<String> = match params.get("glob").and_then(Value::as_str) {
+                    Some(g) => vec![g.to_string()],
                     None => file_type
                         .as_deref()
                         .map(type_to_include_globs)
                         .unwrap_or_default()
-                        .to_vec(),
+                        .iter()
+                        .map(|glob| (*glob).to_string())
+                        .collect(),
                 };
-                let mut result = sandbox_grep(&backend, &id, SandboxGrepOptions {
-                    pattern: &pattern,
-                    path: path_str,
-                    mode,
-                    case_insensitive,
-                    include_globs,
-                    offset,
-                    head_limit,
-                    match_cap: (output_mode == OutputMode::Content)
-                        .then_some(DEFAULT_GREP_MATCH_CAP),
-                })
-                .await?;
+                let sandbox_fs = sandbox_file_system_for_session(router, &session_key).await?;
+                let mut result = sandbox_fs
+                    .grep(SandboxGrepOptions {
+                        pattern: pattern.clone(),
+                        path: path_str.to_string(),
+                        mode,
+                        case_insensitive,
+                        include_globs,
+                        offset,
+                        head_limit,
+                        match_cap: (output_mode == OutputMode::Content)
+                            .then_some(DEFAULT_GREP_MATCH_CAP),
+                    })
+                    .await?;
 
                 // Per-file path policy filter on sandbox results,
                 // mirroring what Glob's sandbox branch does and what
