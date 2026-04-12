@@ -18,6 +18,7 @@ pub struct PolicyContext {
     pub agent_id: String,
     pub provider: Option<String>,
     pub channel: Option<String>,
+    pub channel_account_id: Option<String>,
     pub group_id: Option<String>,
     pub sender_id: Option<String>,
     pub sandboxed: bool,
@@ -94,91 +95,92 @@ impl ToolPolicy {
     }
 }
 
-/// Resolve the effective policy by merging layers from config.
+/// Resolve the effective tool policy by merging layers from typed config.
 ///
 /// Layer precedence (later wins for allow, deny always accumulates):
-/// 1. Global
-/// 2. Per-provider
-/// 3. Per-agent
-/// 4. Per-group
-/// 5. Per-sender in group
-/// 6. Sandbox-specific
-pub fn resolve_effective_policy(config: &serde_json::Value, context: &PolicyContext) -> ToolPolicy {
+/// 1. Global — `[tools.policy]`
+/// 2. Per-provider — `[providers.<name>.policy]`
+/// 3. Per-agent preset — `[agents.presets.<agent_id>.tools]`
+/// 4. Per-channel-group — `[channels.<type>.<account>.tools.groups.<chat_type>]`
+/// 5. Per-sender in group — `[channels.<type>.<account>.tools.groups.<chat_type>.by_sender.<id>]`
+pub fn resolve_effective_policy(
+    config: &moltis_config::MoltisConfig,
+    context: &PolicyContext,
+) -> ToolPolicy {
     let mut effective = ToolPolicy::default();
 
-    // Layer 1: Global — tools.policy
-    if let Some(global) = config.pointer("/tools/policy")
-        && let Ok(p) = serde_json::from_value::<ToolPolicy>(global.clone())
+    // Layer 1: Global — [tools.policy] (profile + allow/deny)
+    if let Some(profile) = config.tools.policy.profile.as_deref()
+        && !profile.is_empty()
     {
-        effective = effective.merge_with(&p);
+        effective = effective.merge_with(&profile_tools(profile));
+        debug!("policy: applied global profile '{profile}'");
+    }
+    let global = ToolPolicy {
+        allow: config.tools.policy.allow.clone(),
+        deny: config.tools.policy.deny.clone(),
+    };
+    if !global.allow.is_empty() || !global.deny.is_empty() {
+        effective = effective.merge_with(&global);
         debug!("policy: applied global layer");
     }
 
-    // Layer 2: Per-provider — tools.providers.<provider>.policy
-    if let Some(ref provider) = context.provider {
-        let pointer = format!("/tools/providers/{}/policy", provider);
-        if let Some(prov) = config.pointer(&pointer)
-            && let Ok(p) = serde_json::from_value::<ToolPolicy>(prov.clone())
-        {
+    // Layer 2: Per-provider — [providers.<name>.policy]
+    if let Some(ref provider_name) = context.provider
+        && let Some(entry) = config.providers.providers.get(provider_name)
+        && let Some(ref provider_policy) = entry.policy
+    {
+        let p = ToolPolicy {
+            allow: provider_policy.allow.clone(),
+            deny: provider_policy.deny.clone(),
+        };
+        if !p.allow.is_empty() || !p.deny.is_empty() {
             effective = effective.merge_with(&p);
-            debug!(provider, "policy: applied provider layer");
+            debug!(provider = provider_name, "policy: applied provider layer");
         }
     }
 
-    // Layer 3: Per-agent — agents.list[agent_id].tools.policy
-    // We scan the agents list for a matching agent_id.
-    if let Some(agents) = config.pointer("/agents/list").and_then(|v| v.as_array()) {
-        for agent in agents {
-            let id = agent.get("id").and_then(|v| v.as_str()).unwrap_or("");
-            if id == context.agent_id {
-                if let Some(agent_policy) = agent.pointer("/tools/policy")
-                    && let Ok(p) = serde_json::from_value::<ToolPolicy>(agent_policy.clone())
-                {
-                    effective = effective.merge_with(&p);
-                    debug!(agent_id = %context.agent_id, "policy: applied agent layer");
-                }
-                break;
+    // Layer 3: Per-agent preset — [agents.presets.<agent_id>.tools]
+    if let Some(preset) = config.agents.get_preset(&context.agent_id) {
+        let p = ToolPolicy {
+            allow: preset.tools.allow.clone(),
+            deny: preset.tools.deny.clone(),
+        };
+        if !p.allow.is_empty() || !p.deny.is_empty() {
+            effective = effective.merge_with(&p);
+            debug!(agent_id = %context.agent_id, "policy: applied agent preset layer");
+        }
+    }
+
+    // Layer 4: Per-channel-group — [channels.<type>.<account>.tools.groups.<chat_type>]
+    if let Some(ref channel) = context.channel
+        && let Some(ref account_id) = context.channel_account_id
+        && let Some(ref group_id) = context.group_id
+        && let Some(override_config) = config.channels.tool_policy_for_account(channel, account_id)
+        && let Some(group_policy) = override_config.groups.get(group_id.as_str())
+    {
+        let p = ToolPolicy {
+            allow: group_policy.allow.clone(),
+            deny: group_policy.deny.clone(),
+        };
+        if !p.allow.is_empty() || !p.deny.is_empty() {
+            effective = effective.merge_with(&p);
+            debug!(channel, account_id, group_id, "policy: applied group layer");
+        }
+
+        // Layer 5: Per-sender — [...groups.<chat_type>.by_sender.<sender_id>]
+        if let Some(ref sender_id) = context.sender_id
+            && let Some(sender_policy) = group_policy.by_sender.get(sender_id.as_str())
+        {
+            let p = ToolPolicy {
+                allow: sender_policy.allow.clone(),
+                deny: sender_policy.deny.clone(),
+            };
+            if !p.allow.is_empty() || !p.deny.is_empty() {
+                effective = effective.merge_with(&p);
+                debug!(channel, group_id, sender_id, "policy: applied sender layer");
             }
         }
-    }
-
-    // Layer 4: Per-group — channels.<ch>.groups.<gid>.tools.policy
-    if let Some(ref channel) = context.channel
-        && let Some(ref group_id) = context.group_id
-    {
-        let pointer = format!("/channels/{}/groups/{}/tools/policy", channel, group_id);
-        if let Some(group) = config.pointer(&pointer)
-            && let Ok(p) = serde_json::from_value::<ToolPolicy>(group.clone())
-        {
-            effective = effective.merge_with(&p);
-            debug!(channel, group_id, "policy: applied group layer");
-        }
-    }
-
-    // Layer 5: Per-sender — channels.<ch>.groups.<gid>.tools.bySender.<sender>
-    if let Some(ref channel) = context.channel
-        && let Some(ref group_id) = context.group_id
-        && let Some(ref sender_id) = context.sender_id
-    {
-        let pointer = format!(
-            "/channels/{}/groups/{}/tools/bySender/{}",
-            channel, group_id, sender_id
-        );
-        if let Some(sender) = config.pointer(&pointer)
-            && let Ok(p) = serde_json::from_value::<ToolPolicy>(sender.clone())
-        {
-            effective = effective.merge_with(&p);
-            debug!(channel, group_id, sender_id, "policy: applied sender layer");
-        }
-    }
-
-    // Layer 6: Sandbox overrides
-    if context.sandboxed
-        && let Some(sandbox_policy) = config.pointer("/tools/exec/sandbox/tools")
-        && let Ok(p) = serde_json::from_value::<ToolPolicy>(sandbox_policy.clone())
-    {
-        effective = effective.merge_with(&p);
-        debug!("policy: applied sandbox layer");
     }
 
     effective
@@ -256,48 +258,182 @@ mod tests {
 
     #[test]
     fn test_resolve_global_policy() {
-        let config = serde_json::json!({
-            "tools": {
-                "policy": {
-                    "allow": ["exec"],
-                    "deny": ["dangerous"]
-                }
-            }
-        });
+        let mut cfg = moltis_config::MoltisConfig::default();
+        cfg.tools.policy.allow = vec!["exec".into()];
+        cfg.tools.policy.deny = vec!["dangerous".into()];
+
         let ctx = PolicyContext {
             agent_id: "test".into(),
             ..Default::default()
         };
-        let policy = resolve_effective_policy(&config, &ctx);
+        let policy = resolve_effective_policy(&cfg, &ctx);
         assert!(policy.is_allowed("exec"));
         assert!(!policy.is_allowed("dangerous"));
         assert!(!policy.is_allowed("browser"));
     }
 
     #[test]
-    fn test_resolve_deny_wins_across_layers() {
-        let config = serde_json::json!({
-            "tools": {
-                "policy": {
-                    "allow": ["*"],
-                    "deny": []
-                },
-                "providers": {
-                    "openai": {
-                        "policy": {
-                            "deny": ["exec"]
-                        }
-                    }
-                }
-            }
+    fn test_resolve_provider_deny_wins_across_layers() {
+        let mut cfg = moltis_config::MoltisConfig::default();
+        cfg.tools.policy.allow = vec!["*".into()];
+
+        let mut provider_entry = moltis_config::schema::ProviderEntry::default();
+        provider_entry.policy = Some(moltis_config::schema::ToolPolicyConfig {
+            allow: Vec::new(),
+            deny: vec!["exec".into()],
+            profile: None,
         });
+        cfg.providers
+            .providers
+            .insert("openai".into(), provider_entry);
+
         let ctx = PolicyContext {
             agent_id: "test".into(),
             provider: Some("openai".into()),
             ..Default::default()
         };
-        let policy = resolve_effective_policy(&config, &ctx);
+        let policy = resolve_effective_policy(&cfg, &ctx);
         assert!(!policy.is_allowed("exec"));
         assert!(policy.is_allowed("browser"));
+    }
+
+    #[test]
+    fn test_resolve_agent_preset_layer() {
+        let mut cfg = moltis_config::MoltisConfig::default();
+        cfg.tools.policy.allow = vec!["*".into()];
+        cfg.agents
+            .presets
+            .insert("researcher".into(), moltis_config::schema::AgentPreset {
+                tools: moltis_config::schema::PresetToolPolicy {
+                    allow: vec!["web_search".into(), "web_fetch".into()],
+                    deny: Vec::new(),
+                },
+                ..Default::default()
+            });
+
+        let ctx = PolicyContext {
+            agent_id: "researcher".into(),
+            ..Default::default()
+        };
+        let policy = resolve_effective_policy(&cfg, &ctx);
+        assert!(policy.is_allowed("web_search"));
+        assert!(policy.is_allowed("web_fetch"));
+        assert!(!policy.is_allowed("exec"));
+    }
+
+    #[test]
+    fn test_resolve_channel_group_policy() {
+        let mut cfg = moltis_config::MoltisConfig::default();
+        cfg.tools.policy.allow = vec!["*".into()];
+
+        // Set up channel config with tool policy.
+        let account_config = serde_json::json!({
+            "token": "bot-token",
+            "tools": {
+                "groups": {
+                    "group": {
+                        "deny": ["exec", "browser"],
+                        "by_sender": {
+                            "trusted_user_123": {
+                                "allow": ["*"],
+                                "deny": []
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        cfg.channels
+            .telegram
+            .insert("my-bot".into(), account_config);
+
+        // Group chat, untrusted sender — exec should be denied.
+        let ctx = PolicyContext {
+            agent_id: "main".into(),
+            channel: Some("telegram".into()),
+            channel_account_id: Some("my-bot".into()),
+            group_id: Some("group".into()),
+            sender_id: Some("random_user".into()),
+            ..Default::default()
+        };
+        let policy = resolve_effective_policy(&cfg, &ctx);
+        assert!(!policy.is_allowed("exec"));
+        assert!(!policy.is_allowed("browser"));
+        assert!(policy.is_allowed("web_search"));
+
+        // Trusted sender — exec allowed via by_sender override.
+        let ctx_trusted = PolicyContext {
+            sender_id: Some("trusted_user_123".into()),
+            ..ctx.clone()
+        };
+        let policy_trusted = resolve_effective_policy(&cfg, &ctx_trusted);
+        // Deny from group layer accumulates, but sender layer replaces allow.
+        // Deny always wins: group denied exec+browser, sender can't override denies.
+        assert!(!policy_trusted.is_allowed("exec"));
+        assert!(!policy_trusted.is_allowed("browser"));
+        // But a new allow pattern from sender layer works for non-denied tools.
+        assert!(policy_trusted.is_allowed("web_search"));
+    }
+
+    #[test]
+    fn test_resolve_channel_group_sender_override_allow() {
+        let mut cfg = moltis_config::MoltisConfig::default();
+        // Restrict global to web_search only.
+        cfg.tools.policy.allow = vec!["web_search".into()];
+
+        let account_config = serde_json::json!({
+            "tools": {
+                "groups": {
+                    "private": {
+                        "by_sender": {
+                            "admin_42": {
+                                "allow": ["*"]
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        cfg.channels.telegram.insert("bot1".into(), account_config);
+
+        // DM from admin — sender layer gives allow = ["*"].
+        let ctx = PolicyContext {
+            agent_id: "main".into(),
+            channel: Some("telegram".into()),
+            channel_account_id: Some("bot1".into()),
+            group_id: Some("private".into()),
+            sender_id: Some("admin_42".into()),
+            ..Default::default()
+        };
+        let policy = resolve_effective_policy(&cfg, &ctx);
+        assert!(policy.is_allowed("exec"));
+        assert!(policy.is_allowed("browser"));
+        assert!(policy.is_allowed("web_search"));
+    }
+
+    #[test]
+    fn test_no_channel_context_skips_layers_4_5() {
+        let mut cfg = moltis_config::MoltisConfig::default();
+        cfg.tools.policy.allow = vec!["*".into()];
+
+        // Even with channel config, no channel in context means layers 4-5 skipped.
+        let account_config = serde_json::json!({
+            "tools": {
+                "groups": {
+                    "group": {
+                        "deny": ["exec"]
+                    }
+                }
+            }
+        });
+        cfg.channels.telegram.insert("bot1".into(), account_config);
+
+        let ctx = PolicyContext {
+            agent_id: "main".into(),
+            // No channel context (e.g. web UI session).
+            ..Default::default()
+        };
+        let policy = resolve_effective_policy(&cfg, &ctx);
+        assert!(policy.is_allowed("exec")); // Not denied — channel layers skipped.
     }
 }

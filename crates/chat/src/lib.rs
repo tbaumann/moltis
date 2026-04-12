@@ -49,7 +49,7 @@ use {
         store::SessionStore,
     },
     moltis_skills::discover::SkillDiscoverer,
-    moltis_tools::policy::{ToolPolicy, profile_tools},
+    moltis_tools::policy::{PolicyContext, ToolPolicy, resolve_effective_policy},
 };
 
 mod compaction;
@@ -1680,25 +1680,12 @@ fn prompt_sandbox_no_network_state(backend: &str, configured_no_network: bool) -
     }
 }
 
-fn effective_tool_policy(config: &moltis_config::MoltisConfig) -> ToolPolicy {
-    let mut effective = ToolPolicy::default();
-    if let Some(profile) = config.tools.policy.profile.as_deref()
-        && !profile.is_empty()
-    {
-        effective = effective.merge_with(&profile_tools(profile));
-    }
-    let configured = ToolPolicy {
-        allow: config.tools.policy.allow.clone(),
-        deny: config.tools.policy.deny.clone(),
-    };
-    effective.merge_with(&configured)
-}
-
 fn apply_runtime_tool_filters(
     base: &ToolRegistry,
     config: &moltis_config::MoltisConfig,
     _skills: &[moltis_skills::types::SkillMetadata],
     mcp_disabled: bool,
+    policy_context: &PolicyContext,
 ) -> ToolRegistry {
     let base_registry = if mcp_disabled {
         base.clone_without_mcp()
@@ -1706,13 +1693,35 @@ fn apply_runtime_tool_filters(
         base.clone_without(&[])
     };
 
-    let policy = effective_tool_policy(config);
+    let policy = resolve_effective_policy(config, policy_context);
     // NOTE: Do not globally restrict tools by discovered skill `allowed_tools`.
     // Skills are always discovered for prompt injection; applying those lists at
     // runtime can unintentionally remove unrelated tools (for example, leaving
     // only `web_fetch` and preventing `create_skill` from being called).
     // Tool availability here is controlled by configured runtime policy.
     base_registry.clone_allowed_by(|name| policy.is_allowed(name))
+}
+
+/// Build a `PolicyContext` from runtime context and request parameters.
+fn build_policy_context(
+    agent_id: &str,
+    runtime_context: Option<&PromptRuntimeContext>,
+    params: Option<&Value>,
+) -> PolicyContext {
+    let host = runtime_context.map(|rc| &rc.host);
+    PolicyContext {
+        agent_id: agent_id.to_string(),
+        provider: host.and_then(|h| h.provider.clone()),
+        channel: host.and_then(|h| h.channel_type.clone()),
+        channel_account_id: host.and_then(|h| h.channel_account_id.clone()),
+        group_id: host.and_then(|h| h.channel_chat_type.clone()),
+        sender_id: params
+            .and_then(|p| p.get("channel"))
+            .and_then(|ch| ch.get("sender_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        sandboxed: false,
+    }
 }
 
 // ── Disabled Models Store ────────────────────────────────────────────────────
@@ -5191,8 +5200,12 @@ impl ChatService for LiveChatService {
         let config = moltis_config::discover_and_load();
         let tools: Vec<Value> = if supports_tools {
             let registry_guard = self.tool_registry.read().await;
+            let list_ctx = PolicyContext {
+                agent_id: "main".into(),
+                ..Default::default()
+            };
             let effective_registry =
-                apply_runtime_tool_filters(&registry_guard, &config, &[], mcp_disabled);
+                apply_runtime_tool_filters(&registry_guard, &config, &[], mcp_disabled, &list_ctx);
             effective_registry
                 .list_schemas()
                 .iter()
@@ -5396,6 +5409,7 @@ impl ChatService for LiveChatService {
             .unwrap_or(false);
 
         // Build filtered tool registry.
+        let policy_ctx = build_policy_context("main", Some(&runtime_context), Some(&params));
         let filtered_registry = {
             let registry_guard = self.tool_registry.read().await;
             if tools_enabled {
@@ -5404,6 +5418,7 @@ impl ChatService for LiveChatService {
                     &persona.config,
                     &discovered_skills,
                     mcp_disabled,
+                    &policy_ctx,
                 )
             } else {
                 registry_guard.clone_without(&[])
@@ -5519,6 +5534,7 @@ impl ChatService for LiveChatService {
             .unwrap_or(false);
 
         // Build filtered tool registry.
+        let policy_ctx = build_policy_context("main", Some(&runtime_context), Some(&params));
         let filtered_registry = {
             let registry_guard = self.tool_registry.read().await;
             if tools_enabled {
@@ -5527,6 +5543,7 @@ impl ChatService for LiveChatService {
                     &persona.config,
                     &discovered_skills,
                     mcp_disabled,
+                    &policy_ctx,
                 )
             } else {
                 registry_guard.clone_without(&[])
@@ -6648,10 +6665,17 @@ async fn run_with_tools(
     let native_tools = matches!(tool_mode, ToolMode::Native);
     let tools_enabled = !matches!(tool_mode, ToolMode::Off);
 
+    let policy_ctx = build_policy_context(agent_id, runtime_context, None);
     let mut filtered_registry = {
         let registry_guard = tool_registry.read().await;
         if tools_enabled {
-            apply_runtime_tool_filters(&registry_guard, &persona.config, skills, mcp_disabled)
+            apply_runtime_tool_filters(
+                &registry_guard,
+                &persona.config,
+                skills,
+                mcp_disabled,
+                &policy_ctx,
+            )
         } else {
             registry_guard.clone_without(&[])
         }
@@ -12455,7 +12479,11 @@ mod tests {
         cfg.tools.policy.profile = Some("full".into());
         cfg.tools.policy.deny = vec!["exec".into()];
 
-        let policy = effective_tool_policy(&cfg);
+        let ctx = PolicyContext {
+            agent_id: "main".into(),
+            ..Default::default()
+        };
+        let policy = resolve_effective_policy(&cfg, &ctx);
         assert!(!policy.is_allowed("exec"));
         assert!(policy.is_allowed("web_fetch"));
     }
@@ -12486,7 +12514,11 @@ mod tests {
             ..Default::default()
         }];
 
-        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false);
+        let ctx = PolicyContext {
+            agent_id: "main".into(),
+            ..Default::default()
+        };
+        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false, &ctx);
         assert!(filtered.get("exec").is_some());
         assert!(filtered.get("web_fetch").is_some());
         assert!(filtered.get("create_skill").is_some());
@@ -12513,7 +12545,11 @@ mod tests {
             ..Default::default()
         }];
 
-        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false);
+        let ctx = PolicyContext {
+            agent_id: "main".into(),
+            ..Default::default()
+        };
+        let filtered = apply_runtime_tool_filters(&registry, &cfg, &skills, false, &ctx);
         assert!(filtered.get("create_skill").is_some());
         assert!(filtered.get("web_fetch").is_some());
     }
