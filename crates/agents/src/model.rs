@@ -206,11 +206,40 @@ pub fn values_to_chat_messages(values: &[serde_json::Value]) -> Vec<ChatMessage>
                 messages.push(ChatMessage::system(content));
             },
             "user" => {
+                let document_context = val["documents"].as_array().and_then(|documents| {
+                    let mut sections = Vec::new();
+                    for document in documents {
+                        let display_name = document["display_name"].as_str()?;
+                        let mime_type = document["mime_type"].as_str()?;
+                        let absolute_path = document["absolute_path"].as_str()?;
+                        let media_ref = document["media_ref"].as_str()?;
+                        sections.push(format!(
+                            "filename: {display_name}\nmime_type: {mime_type}\nlocal_path: {absolute_path}\nmedia_ref: {media_ref}"
+                        ));
+                    }
+                    if sections.is_empty() {
+                        None
+                    } else {
+                        let mut rendered = vec!["[Inbound documents available]".to_string()];
+                        rendered.extend(sections);
+                        Some(rendered.join("\n\n"))
+                    }
+                });
+
                 // Content can be a string or an array (multimodal).
                 if let Some(text) = val["content"].as_str() {
-                    messages.push(ChatMessage::user(text));
+                    let content = if let Some(ref document_context) = document_context {
+                        if text.trim().is_empty() {
+                            document_context.clone()
+                        } else {
+                            format!("{text}\n\n{document_context}")
+                        }
+                    } else {
+                        text.to_string()
+                    };
+                    messages.push(ChatMessage::user(content));
                 } else if let Some(arr) = val["content"].as_array() {
-                    let parts: Vec<ContentPart> = arr
+                    let mut parts: Vec<ContentPart> = arr
                         .iter()
                         .filter_map(|block| {
                             let block_type = block["type"].as_str()?;
@@ -231,9 +260,22 @@ pub fn values_to_chat_messages(values: &[serde_json::Value]) -> Vec<ChatMessage>
                             }
                         })
                         .collect();
+                    if let Some(document_context) = document_context {
+                        if let Some(ContentPart::Text(text)) = parts
+                            .iter_mut()
+                            .find(|part| matches!(part, ContentPart::Text(_)))
+                        {
+                            if !text.trim().is_empty() {
+                                text.push_str("\n\n");
+                            }
+                            text.push_str(&document_context);
+                        } else {
+                            parts.insert(0, ContentPart::Text(document_context));
+                        }
+                    }
                     messages.push(ChatMessage::user_multimodal(parts));
                 } else {
-                    messages.push(ChatMessage::user(""));
+                    messages.push(ChatMessage::user(document_context.unwrap_or_default()));
                 }
             },
             "assistant" => {
@@ -655,6 +697,33 @@ mod tests {
         assert!(val.get("inputTokens").is_none());
         assert!(val.get("outputTokens").is_none());
         assert!(val.get("channel").is_none());
+    }
+
+    #[test]
+    fn convert_user_message_appends_document_context() {
+        let values = vec![serde_json::json!({
+            "role": "user",
+            "content": "review this",
+            "documents": [{
+                "display_name": "report.pdf",
+                "mime_type": "application/pdf",
+                "absolute_path": "/tmp/session_abc/report.pdf",
+                "media_ref": "media/session_abc/report.pdf"
+            }]
+        })];
+        let msgs = values_to_chat_messages(&values);
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            ChatMessage::User {
+                content: UserContent::Text(text),
+            } => {
+                assert!(text.contains("review this"));
+                assert!(text.contains("[Inbound documents available]"));
+                assert!(text.contains("filename: report.pdf"));
+                assert!(text.contains("local_path: /tmp/session_abc/report.pdf"));
+            },
+            _ => panic!("expected user text message"),
+        }
     }
 
     #[test]
