@@ -95,6 +95,26 @@ impl ToolPolicy {
     }
 }
 
+/// Build a `ToolPolicy` from a `ToolPolicyConfig`, expanding the optional
+/// `profile` field before applying explicit allow/deny.
+fn policy_from_config(cfg: &moltis_config::schema::ToolPolicyConfig) -> ToolPolicy {
+    let mut p = if let Some(profile) = cfg.profile.as_deref()
+        && !profile.is_empty()
+    {
+        profile_tools(profile)
+    } else {
+        ToolPolicy::default()
+    };
+    let explicit = ToolPolicy {
+        allow: cfg.allow.clone(),
+        deny: cfg.deny.clone(),
+    };
+    if !explicit.allow.is_empty() || !explicit.deny.is_empty() {
+        p = p.merge_with(&explicit);
+    }
+    p
+}
+
 /// Resolve the effective tool policy by merging layers from typed config.
 ///
 /// Layer precedence (later wins for allow, deny always accumulates):
@@ -131,10 +151,7 @@ pub fn resolve_effective_policy(
         && let Some(entry) = config.providers.providers.get(provider_name)
         && let Some(ref provider_policy) = entry.policy
     {
-        let p = ToolPolicy {
-            allow: provider_policy.allow.clone(),
-            deny: provider_policy.deny.clone(),
-        };
+        let p = policy_from_config(provider_policy);
         if !p.allow.is_empty() || !p.deny.is_empty() {
             effective = effective.merge_with(&p);
             debug!(provider = provider_name, "policy: applied provider layer");
@@ -173,10 +190,7 @@ pub fn resolve_effective_policy(
         if let Some(ref sender_id) = context.sender_id
             && let Some(sender_policy) = group_policy.by_sender.get(sender_id.as_str())
         {
-            let p = ToolPolicy {
-                allow: sender_policy.allow.clone(),
-                deny: sender_policy.deny.clone(),
-            };
+            let p = policy_from_config(sender_policy);
             if !p.allow.is_empty() || !p.deny.is_empty() {
                 effective = effective.merge_with(&p);
                 debug!(channel, group_id, sender_id, "policy: applied sender layer");
@@ -188,10 +202,7 @@ pub fn resolve_effective_policy(
     if context.sandboxed
         && let Some(ref sandbox_policy) = config.tools.exec.sandbox.tools_policy
     {
-        let p = ToolPolicy {
-            allow: sandbox_policy.allow.clone(),
-            deny: sandbox_policy.deny.clone(),
-        };
+        let p = policy_from_config(sandbox_policy);
         if !p.allow.is_empty() || !p.deny.is_empty() {
             effective = effective.merge_with(&p);
             debug!("policy: applied sandbox layer");
@@ -485,5 +496,64 @@ mod tests {
         assert!(policy_sandboxed.is_allowed("exec"));
         assert!(!policy_sandboxed.is_allowed("browser")); // Denied by sandbox layer.
         assert!(!policy_sandboxed.is_allowed("web_search")); // Not in sandbox allow list.
+    }
+
+    #[test]
+    fn test_profile_expanded_in_sender_and_provider_layers() {
+        let mut cfg = moltis_config::MoltisConfig::default();
+        cfg.tools.policy.allow = vec!["web_search".into()];
+
+        // Layer 2: provider with profile = "full"
+        cfg.providers
+            .providers
+            .insert("openai".into(), moltis_config::schema::ProviderEntry {
+                policy: Some(moltis_config::schema::ToolPolicyConfig {
+                    allow: Vec::new(),
+                    deny: Vec::new(),
+                    profile: Some("full".into()),
+                }),
+                ..Default::default()
+            });
+
+        let ctx = PolicyContext {
+            agent_id: "main".into(),
+            provider: Some("openai".into()),
+            ..Default::default()
+        };
+        let policy = resolve_effective_policy(&cfg, &ctx);
+        // "full" profile expands to allow = ["*"], so exec is now allowed.
+        assert!(policy.is_allowed("exec"));
+        assert!(policy.is_allowed("web_search"));
+
+        // Layer 5: sender with profile = "full" in a restricted group.
+        let mut cfg2 = moltis_config::MoltisConfig::default();
+        cfg2.tools.policy.allow = vec!["web_search".into()];
+        let account_config = serde_json::json!({
+            "tools": {
+                "groups": {
+                    "group": {
+                        "by_sender": {
+                            "admin_42": {
+                                "profile": "full"
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        cfg2.channels.telegram.insert("bot1".into(), account_config);
+
+        let ctx2 = PolicyContext {
+            agent_id: "main".into(),
+            channel: Some("telegram".into()),
+            channel_account_id: Some("bot1".into()),
+            group_id: Some("group".into()),
+            sender_id: Some("admin_42".into()),
+            ..Default::default()
+        };
+        let policy2 = resolve_effective_policy(&cfg2, &ctx2);
+        // Sender's "full" profile expands to allow = ["*"].
+        assert!(policy2.is_allowed("exec"));
+        assert!(policy2.is_allowed("browser"));
     }
 }
