@@ -189,7 +189,10 @@ pub async fn sandbox_write(
          if [ ! -d \"$parent\" ]; then exit {EXIT_PARENT_MISSING}; fi; \
          if [ -L \"$path\" ]; then exit {EXIT_SYMLINK}; fi; \
          tmp=\"$path.moltis.$$\"; \
-         printf '%s' '{encoded}' | base64 -d > \"$tmp\" && mv \"$tmp\" \"$path\""
+         if ! printf '%s' '{encoded}' | base64 -d > \"$tmp\"; then rm -f \"$tmp\"; exit 1; fi; \
+         sync \"$tmp\" 2>/dev/null || sync; \
+         if [ -L \"$path\" ]; then rm -f \"$tmp\"; exit {EXIT_SYMLINK}; fi; \
+         mv \"$tmp\" \"$path\""
     );
 
     let result = backend.exec(id, &script, &default_opts()).await?;
@@ -269,9 +272,12 @@ pub struct SandboxGrepOptions<'a> {
     pub path: &'a str,
     pub mode: SandboxGrepMode,
     pub case_insensitive: bool,
-    /// Shell-level `--include=GLOB` filter. Caller is responsible for
-    /// mapping `type` → glob before calling.
-    pub include_glob: Option<&'a str>,
+    /// Shell-level `--include=GLOB` filters. Caller is responsible for
+    /// mapping `type` → globs before calling.
+    pub include_globs: Vec<&'a str>,
+    pub offset: usize,
+    pub head_limit: Option<usize>,
+    pub match_cap: Option<usize>,
 }
 
 /// Run `grep` inside the sandbox and return a typed payload shaped
@@ -300,15 +306,20 @@ pub async fn sandbox_grep(
             flags.push("-H");
         },
     }
-    let include_arg = opts
-        .include_glob
-        .map(|g| format!("--include={}", shell_single_quote(g)))
-        .unwrap_or_default();
+    let include_args = if opts.include_globs.is_empty() {
+        String::new()
+    } else {
+        opts.include_globs
+            .iter()
+            .map(|glob| format!("--include={}", shell_single_quote(glob)))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     let flags_str = flags.join(" ");
     // grep exits 0 on match, 1 on no match, 2 on error. Treat 0 and 1
     // as success so empty-result calls don't error.
     let script = format!(
-        "grep {flags_str} {include_arg} -- {pattern_q} {path_q} 2>/dev/null; \
+        "grep {flags_str} {include_args} -- {pattern_q} {path_q} 2>/dev/null; \
          rc=$?; if [ $rc -eq 1 ]; then exit 0; else exit $rc; fi"
     );
     let result = backend.exec(id, &script, &default_opts()).await?;
@@ -329,11 +340,15 @@ pub async fn sandbox_grep(
         .collect();
 
     match opts.mode {
-        SandboxGrepMode::FilesWithMatches => Ok(json!({
-            "mode": "files_with_matches",
-            "files": lines.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            "truncated": false,
-        })),
+        SandboxGrepMode::FilesWithMatches => {
+            let files = lines.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            let (files, truncated) = apply_head_offset(files, opts.offset, opts.head_limit);
+            Ok(json!({
+                "mode": "files_with_matches",
+                "files": files,
+                "truncated": truncated,
+            }))
+        },
         SandboxGrepMode::Count => {
             let mut counts = Vec::new();
             for line in &lines {
@@ -348,10 +363,11 @@ pub async fn sandbox_grep(
                     }));
                 }
             }
+            let (counts, truncated) = apply_head_offset(counts, opts.offset, opts.head_limit);
             Ok(json!({
                 "mode": "count",
                 "counts": counts,
-                "truncated": false,
+                "truncated": truncated,
             }))
         },
         SandboxGrepMode::Content => {
@@ -374,13 +390,42 @@ pub async fn sandbox_grep(
                     "block": vec![format!("{lineno}:{text}")],
                 }));
             }
+            let (matches, cap_truncated) = apply_match_cap(matches, opts.match_cap);
+            let (matches, page_truncated) =
+                apply_head_offset(matches, opts.offset, opts.head_limit);
             Ok(json!({
                 "mode": "content",
                 "matches": matches,
-                "truncated": false,
+                "truncated": cap_truncated || page_truncated,
             }))
         },
     }
+}
+
+fn apply_match_cap<T>(mut rows: Vec<T>, match_cap: Option<usize>) -> (Vec<T>, bool) {
+    match match_cap {
+        Some(limit) if rows.len() > limit => {
+            rows.truncate(limit);
+            (rows, true)
+        },
+        _ => (rows, false),
+    }
+}
+
+fn apply_head_offset<T: Clone>(
+    rows: Vec<T>,
+    offset: usize,
+    head_limit: Option<usize>,
+) -> (Vec<T>, bool) {
+    let total = rows.len();
+    let start = offset.min(total);
+    let slice = &rows[start..];
+    let offset_truncated = start > 0;
+    let (capped, head_truncated) = match head_limit {
+        Some(limit) if slice.len() > limit => (&slice[..limit], true),
+        _ => (slice, false),
+    };
+    (capped.to_vec(), offset_truncated || head_truncated)
 }
 
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -544,6 +589,8 @@ mod tests {
         let cmd = mock.last_command().unwrap();
         assert!(cmd.contains("/data/out.txt"));
         assert!(cmd.contains(&BASE64.encode(b"abc")));
+        assert!(cmd.contains("sync \"$tmp\""));
+        assert!(cmd.matches("if [ -L \"$path\" ]").count() >= 2);
     }
 
     #[tokio::test]
@@ -585,7 +632,10 @@ mod tests {
             path: "/data",
             mode: SandboxGrepMode::FilesWithMatches,
             case_insensitive: false,
-            include_glob: None,
+            include_globs: Vec::new(),
+            offset: 0,
+            head_limit: None,
+            match_cap: None,
         })
         .await
         .unwrap();
@@ -608,7 +658,10 @@ mod tests {
             path: "/data",
             mode: SandboxGrepMode::Content,
             case_insensitive: false,
-            include_glob: Some("*.rs"),
+            include_globs: vec!["*.rs"],
+            offset: 0,
+            head_limit: None,
+            match_cap: Some(1000),
         })
         .await
         .unwrap();
@@ -635,7 +688,10 @@ mod tests {
             path: "/data",
             mode: SandboxGrepMode::Count,
             case_insensitive: true,
-            include_glob: None,
+            include_globs: Vec::new(),
+            offset: 0,
+            head_limit: None,
+            match_cap: None,
         })
         .await
         .unwrap();
@@ -661,11 +717,65 @@ mod tests {
             path: "/data",
             mode: SandboxGrepMode::FilesWithMatches,
             case_insensitive: false,
-            include_glob: None,
+            include_globs: Vec::new(),
+            offset: 0,
+            head_limit: None,
+            match_cap: None,
         })
         .await
         .unwrap();
         assert_eq!(value["files"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn sandbox_grep_applies_offset_and_head_limit() {
+        let mock = MockSandbox::new(vec![ExecResult {
+            stdout: "/data/a.rs\n/data/b.rs\n/data/c.rs\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        }]);
+        let backend: Arc<dyn Sandbox> = mock;
+        let value = sandbox_grep(&backend, &test_id(), SandboxGrepOptions {
+            pattern: "foo",
+            path: "/data",
+            mode: SandboxGrepMode::FilesWithMatches,
+            case_insensitive: false,
+            include_globs: Vec::new(),
+            offset: 1,
+            head_limit: Some(1),
+            match_cap: None,
+        })
+        .await
+        .unwrap();
+        let files = value["files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0], "/data/b.rs");
+        assert_eq!(value["truncated"], true);
+    }
+
+    #[tokio::test]
+    async fn sandbox_grep_content_applies_match_cap() {
+        let mock = MockSandbox::new(vec![ExecResult {
+            stdout: "/data/a.rs:1:one\n/data/a.rs:2:two\n/data/a.rs:3:three\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        }]);
+        let backend: Arc<dyn Sandbox> = mock;
+        let value = sandbox_grep(&backend, &test_id(), SandboxGrepOptions {
+            pattern: "foo",
+            path: "/data",
+            mode: SandboxGrepMode::Content,
+            case_insensitive: false,
+            include_globs: vec!["*.rs", "*.ts"],
+            offset: 0,
+            head_limit: None,
+            match_cap: Some(2),
+        })
+        .await
+        .unwrap();
+        let matches = value["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 2);
+        assert_eq!(value["truncated"], true);
     }
 
     #[tokio::test]

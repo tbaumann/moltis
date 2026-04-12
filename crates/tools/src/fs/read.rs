@@ -9,7 +9,7 @@ use {
     async_trait::async_trait,
     moltis_agents::tool_registry::AgentTool,
     serde_json::{Value, json},
-    std::sync::Arc,
+    std::{path::Path, sync::Arc},
     tokio::fs,
     tracing::instrument,
 };
@@ -111,6 +111,11 @@ impl ReadTool {
         if let Some(ref router) = self.sandbox_router
             && router.is_sandboxed(session_key).await
         {
+            if let Some(ref policy) = self.path_policy
+                && let Some(payload) = enforce_path_policy(policy, Path::new(file_path))
+            {
+                return Ok(payload);
+            }
             let (backend, id) = ensure_sandbox(router, session_key).await?;
             let result = sandbox_read(&backend, &id, file_path, DEFAULT_MAX_READ_BYTES).await?;
             match result {

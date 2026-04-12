@@ -1871,6 +1871,13 @@ pub struct FsToolsConfig {
     #[serde(default)]
     pub must_read_before_write: bool,
 
+    /// Whether Write/Edit/MultiEdit must pause for explicit operator
+    /// approval before mutating a file. Default `false` for backward
+    /// compatibility with existing installs; the generated config
+    /// template enables it for new installs.
+    #[serde(default)]
+    pub require_approval: bool,
+
     /// Maximum bytes a single `Read` call can return before the file is
     /// rejected with a typed `too_large` payload. Default 10 MB.
     #[serde(default = "default_fs_max_read_bytes")]
@@ -1912,6 +1919,7 @@ impl Default for FsToolsConfig {
             deny_paths: Vec::new(),
             track_reads: false,
             must_read_before_write: false,
+            require_approval: false,
             max_read_bytes: default_fs_max_read_bytes(),
             binary_policy: FsBinaryPolicy::default(),
             respect_gitignore: default_fs_respect_gitignore(),

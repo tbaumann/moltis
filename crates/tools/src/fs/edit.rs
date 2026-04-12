@@ -18,14 +18,17 @@ use moltis_metrics::{counter, labels, tools as tools_metrics};
 
 use crate::{
     Result,
+    approval::ApprovalManager,
     checkpoints::CheckpointManager,
     error::Error,
+    exec::ApprovalBroadcaster,
     fs::{
         sandbox_bridge::{SandboxReadResult, ensure_sandbox, sandbox_read, sandbox_write},
         shared::{
             DEFAULT_MAX_READ_BYTES, FsPathPolicy, FsState, canonicalize_existing,
             enforce_must_read_before_write, enforce_path_policy, ensure_regular_file,
-            note_fs_mutation, reject_if_symlink, session_key_from,
+            note_fs_mutation, reject_if_symlink, require_absolute, require_fs_mutation_approval,
+            session_key_from,
         },
     },
     sandbox::SandboxRouter,
@@ -137,6 +140,8 @@ pub struct EditTool {
     path_policy: Option<FsPathPolicy>,
     checkpoint_manager: Option<Arc<CheckpointManager>>,
     sandbox_router: Option<Arc<SandboxRouter>>,
+    approval_manager: Option<Arc<ApprovalManager>>,
+    broadcaster: Option<Arc<dyn ApprovalBroadcaster>>,
 }
 
 impl EditTool {
@@ -175,6 +180,18 @@ impl EditTool {
         self
     }
 
+    /// Attach approval gating for file mutations.
+    #[must_use]
+    pub fn with_approval(
+        mut self,
+        manager: Arc<ApprovalManager>,
+        broadcaster: Arc<dyn ApprovalBroadcaster>,
+    ) -> Self {
+        self.approval_manager = Some(manager);
+        self.broadcaster = Some(broadcaster);
+        self
+    }
+
     #[instrument(skip(self, old_string, new_string), fields(file_path = %file_path, replace_all))]
     async fn edit_impl(
         &self,
@@ -184,6 +201,9 @@ impl EditTool {
         replace_all: bool,
         session_key: &str,
     ) -> Result<Value> {
+        require_absolute(file_path, "file_path")?;
+        let approval_request = format!("Edit {file_path}");
+
         // Sandbox dispatch: read through the bridge, apply in host
         // memory, write through the bridge. Skips host canonicalization
         // and symlink check because the sandbox path is what the LLM
@@ -191,6 +211,11 @@ impl EditTool {
         if let Some(ref router) = self.sandbox_router
             && router.is_sandboxed(session_key).await
         {
+            if let Some(ref policy) = self.path_policy
+                && let Some(payload) = enforce_path_policy(policy, Path::new(file_path))
+            {
+                return Ok(payload);
+            }
             let (backend, id) = ensure_sandbox(router, session_key).await?;
             let read_result =
                 sandbox_read(&backend, &id, file_path, DEFAULT_MAX_READ_BYTES).await?;
@@ -208,6 +233,12 @@ impl EditTool {
                 ))
             })?;
             let outcome = apply_edit(&content, old_string, new_string, replace_all)?;
+            require_fs_mutation_approval(
+                self.approval_manager.as_ref(),
+                self.broadcaster.as_ref(),
+                &approval_request,
+            )
+            .await?;
             if let Some(payload) =
                 sandbox_write(&backend, &id, file_path, outcome.content.as_bytes()).await?
             {
@@ -248,6 +279,13 @@ impl EditTool {
             .map_err(|e| Error::message(format!("failed to read '{file_path}': {e}")))?;
 
         let outcome = apply_edit(&content, old_string, new_string, replace_all)?;
+
+        require_fs_mutation_approval(
+            self.approval_manager.as_ref(),
+            self.broadcaster.as_ref(),
+            &approval_request,
+        )
+        .await?;
 
         // Optional checkpoint before the mutation lands.
         let checkpoint_id = if let Some(ref manager) = self.checkpoint_manager {

@@ -31,18 +31,7 @@ pub fn profile_tools(profile: &str) -> ToolPolicy {
             deny: Vec::new(),
         },
         "coding" => ToolPolicy {
-            allow: vec![
-                "exec".into(),
-                "browser".into(),
-                "memory".into(),
-                // Native filesystem tools (moltis-org/moltis#657).
-                "Read".into(),
-                "Write".into(),
-                "Edit".into(),
-                "MultiEdit".into(),
-                "Glob".into(),
-                "Grep".into(),
-            ],
+            allow: vec!["exec".into(), "browser".into(), "memory".into()],
             deny: Vec::new(),
         },
         "full" => ToolPolicy {
@@ -260,6 +249,11 @@ mod tests {
         let minimal = profile_tools("minimal");
         assert!(minimal.is_allowed("exec"));
         assert!(!minimal.is_allowed("browser"));
+
+        let coding = profile_tools("coding");
+        assert!(coding.is_allowed("exec"));
+        assert!(!coding.is_allowed("Read"));
+        assert!(!coding.is_allowed("Write"));
 
         let full = profile_tools("full");
         assert!(full.is_allowed("anything"));

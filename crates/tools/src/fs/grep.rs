@@ -358,21 +358,26 @@ fn apply_head_offset<T: Clone>(
 /// `None` when the type doesn't map to a simple one-extension glob —
 /// the caller then falls back to no include filter and grep scans
 /// everything.
-fn type_to_include_glob(ty: &str) -> Option<&'static str> {
+fn type_to_include_globs(ty: &str) -> &'static [&'static str] {
     match ty {
-        "rust" => Some("*.rs"),
-        "py" | "python" => Some("*.py"),
-        "go" => Some("*.go"),
-        "java" => Some("*.java"),
-        "md" => Some("*.md"),
-        "toml" => Some("*.toml"),
-        "json" => Some("*.json"),
-        "html" => Some("*.html"),
-        "css" => Some("*.css"),
-        "sh" => Some("*.sh"),
-        // js/ts/jsx/tsx/cpp/c would need multiple globs; skip here
-        // and let the sandbox path do a broader scan.
-        _ => None,
+        "rust" => &["*.rs"],
+        "py" | "python" => &["*.py"],
+        "js" => &["*.js", "*.mjs", "*.cjs"],
+        "ts" => &["*.ts", "*.tsx"],
+        "tsx" => &["*.tsx"],
+        "jsx" => &["*.jsx"],
+        "go" => &["*.go"],
+        "java" => &["*.java"],
+        "c" => &["*.c", "*.h"],
+        "cpp" => &["*.cpp", "*.cc", "*.cxx", "*.hpp", "*.hh"],
+        "md" => &["*.md", "*.markdown"],
+        "toml" => &["*.toml"],
+        "yaml" => &["*.yaml", "*.yml"],
+        "json" => &["*.json"],
+        "html" => &["*.html", "*.htm"],
+        "css" => &["*.css"],
+        "sh" => &["*.sh", "*.bash"],
+        _ => &[],
     }
 }
 
@@ -551,10 +556,9 @@ impl AgentTool for GrepTool {
             .map(|n| n as usize)
             .unwrap_or(0);
 
-        // Sandbox dispatch: shell grep into the container. Context
-        // lines, multiline mode, head_limit/offset are not honored on
-        // the sandbox path in this revision — they can land in a
-        // follow-up if demand materializes.
+        // Sandbox dispatch: shell grep into the container, then apply
+        // the same paging and truncation rules on the host side so the
+        // LLM-facing payload stays consistent across routing modes.
         if let Some(ref router) = self.sandbox_router {
             let session_key = session_key_from(&params).to_string();
             if router.is_sandboxed(&session_key).await {
@@ -567,22 +571,26 @@ impl AgentTool for GrepTool {
                     OutputMode::FilesWithMatches => SandboxGrepMode::FilesWithMatches,
                     OutputMode::Count => SandboxGrepMode::Count,
                 };
-                // Map `type` to a grep --include glob. `glob` takes
+                // Map `type` to grep --include globs. `glob` takes
                 // precedence when both are set.
-                let include_glob_owned: Option<String> =
-                    match params.get("glob").and_then(Value::as_str) {
-                        Some(g) => Some(g.to_string()),
-                        None => file_type
-                            .as_deref()
-                            .and_then(type_to_include_glob)
-                            .map(str::to_string),
-                    };
+                let include_globs: Vec<&str> = match params.get("glob").and_then(Value::as_str) {
+                    Some(g) => vec![g],
+                    None => file_type
+                        .as_deref()
+                        .map(type_to_include_globs)
+                        .unwrap_or_default()
+                        .to_vec(),
+                };
                 return Ok(sandbox_grep(&backend, &id, SandboxGrepOptions {
                     pattern: &pattern,
                     path: path_str,
                     mode,
                     case_insensitive,
-                    include_glob: include_glob_owned.as_deref(),
+                    include_globs,
+                    offset,
+                    head_limit,
+                    match_cap: (output_mode == OutputMode::Content)
+                        .then_some(DEFAULT_GREP_MATCH_CAP),
                 })
                 .await?);
             }

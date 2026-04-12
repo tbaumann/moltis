@@ -30,7 +30,10 @@ pub use {
 };
 
 use {
-    crate::{checkpoints::CheckpointManager, sandbox::SandboxRouter},
+    crate::{
+        approval::ApprovalManager, checkpoints::CheckpointManager, exec::ApprovalBroadcaster,
+        sandbox::SandboxRouter,
+    },
     moltis_agents::tool_registry::ToolRegistry,
     std::{path::PathBuf, sync::Arc},
 };
@@ -62,6 +65,13 @@ pub struct FsToolsContext {
     /// the [`sandbox_bridge`] for sessions the router marks as
     /// sandboxed; unsandboxed sessions still run on the host.
     pub sandbox_router: Option<Arc<SandboxRouter>>,
+    /// Optional approval gate for mutating fs tools. When set,
+    /// Write/Edit/MultiEdit pause for explicit approval before
+    /// persisting changes.
+    pub approval_manager: Option<Arc<ApprovalManager>>,
+    /// Optional broadcaster paired with [`approval_manager`] so pending
+    /// fs mutation approvals show up in the gateway UI.
+    pub broadcaster: Option<Arc<dyn ApprovalBroadcaster>>,
     /// Model context window in tokens. When set, enables `Read`'s
     /// adaptive byte cap so per-call output scales with the working
     /// set instead of using a fixed 256 KB ceiling.
@@ -80,6 +90,8 @@ impl Default for FsToolsContext {
             respect_gitignore: true,
             checkpoint_manager: None,
             sandbox_router: None,
+            approval_manager: None,
+            broadcaster: None,
             context_window_tokens: None,
         }
     }
@@ -106,6 +118,8 @@ pub fn register_fs_tools(registry: &mut ToolRegistry, context: FsToolsContext) {
         respect_gitignore,
         checkpoint_manager,
         sandbox_router,
+        approval_manager,
+        broadcaster,
         context_window_tokens,
     } = context;
 
@@ -137,6 +151,9 @@ pub fn register_fs_tools(registry: &mut ToolRegistry, context: FsToolsContext) {
     if let Some(ref r) = sandbox_router {
         write = write.with_sandbox_router(r.clone());
     }
+    if let (Some(manager), Some(broadcaster)) = (&approval_manager, &broadcaster) {
+        write = write.with_approval(manager.clone(), broadcaster.clone());
+    }
     registry.register(Box::new(write));
 
     let mut edit = EditTool::new();
@@ -152,6 +169,9 @@ pub fn register_fs_tools(registry: &mut ToolRegistry, context: FsToolsContext) {
     if let Some(ref r) = sandbox_router {
         edit = edit.with_sandbox_router(r.clone());
     }
+    if let (Some(manager), Some(broadcaster)) = (&approval_manager, &broadcaster) {
+        edit = edit.with_approval(manager.clone(), broadcaster.clone());
+    }
     registry.register(Box::new(edit));
 
     let mut multi_edit = MultiEditTool::new();
@@ -166,6 +186,9 @@ pub fn register_fs_tools(registry: &mut ToolRegistry, context: FsToolsContext) {
     }
     if let Some(ref r) = sandbox_router {
         multi_edit = multi_edit.with_sandbox_router(r.clone());
+    }
+    if let (Some(manager), Some(broadcaster)) = (&approval_manager, &broadcaster) {
+        multi_edit = multi_edit.with_approval(manager.clone(), broadcaster.clone());
     }
     registry.register(Box::new(multi_edit));
 
@@ -206,7 +229,39 @@ mod contract_tests {
     //! and schema drift that the per-module unit tests can miss (they
     //! bypass trait-object dispatch by calling impl methods directly).
 
-    use {super::*, serde_json::json};
+    use {
+        super::*,
+        crate::{
+            approval::{ApprovalDecision, ApprovalManager},
+            exec::ApprovalBroadcaster,
+        },
+        async_trait::async_trait,
+        serde_json::json,
+        std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+    };
+
+    struct TestBroadcaster {
+        called: AtomicBool,
+    }
+
+    impl TestBroadcaster {
+        fn new() -> Self {
+            Self {
+                called: AtomicBool::new(false),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ApprovalBroadcaster for TestBroadcaster {
+        async fn broadcast_request(&self, _request_id: &str, _command: &str) -> crate::Result<()> {
+            self.called.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
 
     fn build_registry(workspace_root: Option<PathBuf>) -> ToolRegistry {
         let mut registry = ToolRegistry::new();
@@ -799,6 +854,52 @@ mod contract_tests {
     }
 
     #[tokio::test]
+    async fn sandbox_grep_type_filter_expands_multi_extension_languages() {
+        use {
+            crate::{
+                exec::ExecResult,
+                fs::sandbox_bridge::test_helpers::MockSandbox,
+                sandbox::{Sandbox, SandboxConfig, SandboxRouter},
+            },
+            std::sync::Arc,
+        };
+
+        let mock = MockSandbox::new(vec![ExecResult {
+            stdout: "/data/app.ts:3:const x = 1\n".to_string(),
+            stderr: String::new(),
+            exit_code: 0,
+        }]);
+        let backend: Arc<dyn Sandbox> = mock.clone();
+        let router = Arc::new(SandboxRouter::with_backend(
+            SandboxConfig::default(),
+            backend,
+        ));
+        router.set_override("sandboxed", true).await;
+
+        let mut registry = ToolRegistry::new();
+        register_fs_tools(&mut registry, FsToolsContext {
+            sandbox_router: Some(router),
+            ..FsToolsContext::default()
+        });
+
+        let grep = registry.get("Grep").unwrap();
+        let _ = grep
+            .execute(json!({
+                "pattern": "const",
+                "path": "/data",
+                "output_mode": "content",
+                "type": "ts",
+                "_session_key": "sandboxed",
+            }))
+            .await
+            .unwrap();
+
+        let cmd = mock.last_command().unwrap();
+        assert!(cmd.contains("--include='*.ts'"));
+        assert!(cmd.contains("--include='*.tsx'"));
+    }
+
+    #[tokio::test]
     async fn sandbox_write_via_registry_sends_base64_to_bridge() {
         use {
             crate::{
@@ -842,6 +943,260 @@ mod contract_tests {
         let cmd = mock.last_command().unwrap();
         assert!(cmd.contains("/data/out.txt"));
         assert!(cmd.contains(&BASE64.encode(b"sandboxed write")));
+    }
+
+    #[tokio::test]
+    async fn sandbox_read_denied_by_path_policy_before_bridge() {
+        use {
+            crate::{
+                exec::ExecResult,
+                fs::sandbox_bridge::test_helpers::MockSandbox,
+                sandbox::{Sandbox, SandboxConfig, SandboxRouter},
+            },
+            std::sync::Arc,
+        };
+
+        let policy = FsPathPolicy::new(&[], &["/data/secrets/**".to_string()]).unwrap();
+        let mock = MockSandbox::new(vec![ExecResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+        }]);
+        let backend: Arc<dyn Sandbox> = mock.clone();
+        let router = Arc::new(SandboxRouter::with_backend(
+            SandboxConfig::default(),
+            backend,
+        ));
+        router.set_override("sandboxed", true).await;
+
+        let mut registry = ToolRegistry::new();
+        register_fs_tools(&mut registry, FsToolsContext {
+            path_policy: Some(policy),
+            sandbox_router: Some(router),
+            ..FsToolsContext::default()
+        });
+
+        let read = registry.get("Read").unwrap();
+        let value = read
+            .execute(json!({
+                "file_path": "/data/secrets/token.txt",
+                "_session_key": "sandboxed",
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(value["kind"], "path_denied");
+        assert!(mock.last_command().is_none());
+    }
+
+    #[tokio::test]
+    async fn sandbox_write_denied_by_path_policy_before_bridge() {
+        use {
+            crate::{
+                exec::ExecResult,
+                fs::sandbox_bridge::test_helpers::MockSandbox,
+                sandbox::{Sandbox, SandboxConfig, SandboxRouter},
+            },
+            std::sync::Arc,
+        };
+
+        let policy = FsPathPolicy::new(&[], &["/data/secrets/**".to_string()]).unwrap();
+        let mock = MockSandbox::new(vec![ExecResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+        }]);
+        let backend: Arc<dyn Sandbox> = mock.clone();
+        let router = Arc::new(SandboxRouter::with_backend(
+            SandboxConfig::default(),
+            backend,
+        ));
+        router.set_override("sandboxed", true).await;
+
+        let mut registry = ToolRegistry::new();
+        register_fs_tools(&mut registry, FsToolsContext {
+            path_policy: Some(policy),
+            sandbox_router: Some(router),
+            ..FsToolsContext::default()
+        });
+
+        let write = registry.get("Write").unwrap();
+        let value = write
+            .execute(json!({
+                "file_path": "/data/secrets/token.txt",
+                "content": "nope",
+                "_session_key": "sandboxed",
+            }))
+            .await
+            .unwrap();
+
+        assert_eq!(value["kind"], "path_denied");
+        assert!(mock.last_command().is_none());
+    }
+
+    #[tokio::test]
+    async fn sandbox_write_requires_approval_before_bridge() {
+        use {
+            crate::{
+                exec::ExecResult,
+                fs::sandbox_bridge::test_helpers::MockSandbox,
+                sandbox::{Sandbox, SandboxConfig, SandboxRouter},
+            },
+            base64::{Engine as _, engine::general_purpose::STANDARD as BASE64},
+            std::sync::Arc,
+        };
+
+        let mock = MockSandbox::new(vec![ExecResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: 0,
+        }]);
+        let backend: Arc<dyn Sandbox> = mock.clone();
+        let router = Arc::new(SandboxRouter::with_backend(
+            SandboxConfig::default(),
+            backend,
+        ));
+        router.set_override("sandboxed", true).await;
+
+        let approval_manager = Arc::new(ApprovalManager::default());
+        let broadcaster = Arc::new(TestBroadcaster::new());
+        let broadcaster_dyn: Arc<dyn ApprovalBroadcaster> = broadcaster.clone();
+
+        let mut registry = ToolRegistry::new();
+        register_fs_tools(&mut registry, FsToolsContext {
+            sandbox_router: Some(router),
+            approval_manager: Some(approval_manager.clone()),
+            broadcaster: Some(broadcaster_dyn),
+            ..FsToolsContext::default()
+        });
+
+        let mgr = approval_manager.clone();
+        let resolver = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let id = mgr
+                .pending_ids()
+                .await
+                .first()
+                .cloned()
+                .expect("request id");
+            mgr.resolve(&id, ApprovalDecision::Approved, Some("Write /data/out.txt"))
+                .await;
+        });
+
+        let write = registry.get("Write").unwrap();
+        let value = write
+            .execute(json!({
+                "file_path": "/data/out.txt",
+                "content": "sandboxed write",
+                "_session_key": "sandboxed",
+            }))
+            .await
+            .unwrap();
+        resolver.await.unwrap();
+
+        assert_eq!(value["bytes_written"], 15);
+        assert!(broadcaster.called.load(Ordering::SeqCst));
+        let cmd = mock.last_command().unwrap();
+        assert!(cmd.contains("/data/out.txt"));
+        assert!(cmd.contains(&BASE64.encode(b"sandboxed write")));
+    }
+
+    #[tokio::test]
+    async fn edit_denied_without_approval_does_not_mutate_host_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("edit.txt");
+        tokio::fs::write(&target, "before\n").await.unwrap();
+
+        let approval_manager = Arc::new(ApprovalManager::default());
+        let broadcaster = Arc::new(TestBroadcaster::new());
+        let broadcaster_dyn: Arc<dyn ApprovalBroadcaster> = broadcaster.clone();
+
+        let mut registry = ToolRegistry::new();
+        register_fs_tools(&mut registry, FsToolsContext {
+            approval_manager: Some(approval_manager.clone()),
+            broadcaster: Some(broadcaster_dyn),
+            ..FsToolsContext::default()
+        });
+
+        let mgr = approval_manager.clone();
+        let resolver = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let id = mgr
+                .pending_ids()
+                .await
+                .first()
+                .cloned()
+                .expect("request id");
+            mgr.resolve(&id, ApprovalDecision::Denied, None).await;
+        });
+
+        let edit = registry.get("Edit").unwrap();
+        let err = edit
+            .execute(json!({
+                "file_path": target.to_str().unwrap(),
+                "old_string": "before",
+                "new_string": "after",
+            }))
+            .await
+            .unwrap_err();
+        resolver.await.unwrap();
+
+        assert!(err.to_string().contains("denied"));
+        assert_eq!(
+            tokio::fs::read_to_string(&target).await.unwrap(),
+            "before\n"
+        );
+        assert!(broadcaster.called.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn multi_edit_denied_without_approval_does_not_mutate_host_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("multi.txt");
+        tokio::fs::write(&target, "alpha\nbeta\n").await.unwrap();
+
+        let approval_manager = Arc::new(ApprovalManager::default());
+        let broadcaster = Arc::new(TestBroadcaster::new());
+        let broadcaster_dyn: Arc<dyn ApprovalBroadcaster> = broadcaster.clone();
+
+        let mut registry = ToolRegistry::new();
+        register_fs_tools(&mut registry, FsToolsContext {
+            approval_manager: Some(approval_manager.clone()),
+            broadcaster: Some(broadcaster_dyn),
+            ..FsToolsContext::default()
+        });
+
+        let mgr = approval_manager.clone();
+        let resolver = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let id = mgr
+                .pending_ids()
+                .await
+                .first()
+                .cloned()
+                .expect("request id");
+            mgr.resolve(&id, ApprovalDecision::Denied, None).await;
+        });
+
+        let multi_edit = registry.get("MultiEdit").unwrap();
+        let err = multi_edit
+            .execute(json!({
+                "file_path": target.to_str().unwrap(),
+                "edits": [
+                    { "old_string": "alpha", "new_string": "gamma" },
+                    { "old_string": "beta", "new_string": "delta" }
+                ],
+            }))
+            .await
+            .unwrap_err();
+        resolver.await.unwrap();
+
+        assert!(err.to_string().contains("denied"));
+        assert_eq!(
+            tokio::fs::read_to_string(&target).await.unwrap(),
+            "alpha\nbeta\n"
+        );
+        assert!(broadcaster.called.load(Ordering::SeqCst));
     }
 
     #[tokio::test]

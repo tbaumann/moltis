@@ -522,6 +522,18 @@ pub fn approval_manager_from_config(config: &moltis_config::MoltisConfig) -> App
     manager
 }
 
+#[cfg(feature = "fs-tools")]
+fn fs_tools_host_warning_message(router: &moltis_tools::sandbox::SandboxRouter) -> Option<String> {
+    if router.backend().is_real() {
+        return None;
+    }
+
+    Some(format!(
+        "fs tools are registered but no real sandbox backend is available (backend: {}). Read/Write/Edit/MultiEdit/Glob/Grep will operate on the gateway host directly. Install Docker, Podman, or Apple Container, or disable fs tools via --no-default-features for isolation. If you must run without a container runtime, constrain access with [tools.fs].allow_paths = [...].",
+        router.backend_name()
+    ))
+}
+
 fn env_var_or_unset(name: &str) -> String {
     std::env::var(name)
         .ok()
@@ -2847,6 +2859,15 @@ pub async fn prepare_gateway_core(
     let (hook_registry, discovered_hooks_info) =
         discover_and_build_hooks(&persisted_disabled, Some(&session_store)).await;
 
+    #[cfg(feature = "fs-tools")]
+    let shared_fs_state = if config.tools.fs.track_reads {
+        Some(moltis_tools::fs::new_fs_state(
+            config.tools.fs.must_read_before_write,
+        ))
+    } else {
+        None
+    };
+
     // Wire live session service with sandbox router, project store, hooks, and browser.
     {
         let mut session_svc =
@@ -2858,6 +2879,10 @@ pub async fn prepare_gateway_core(
                 .with_project_store(Arc::clone(&project_store))
                 .with_state_store(Arc::clone(&session_state_store))
                 .with_browser_service(Arc::clone(&services.browser));
+        #[cfg(feature = "fs-tools")]
+        if let Some(ref fs_state) = shared_fs_state {
+            session_svc = session_svc.with_fs_state(Arc::clone(fs_state));
+        }
         if let Some(ref hooks) = hook_registry {
             session_svc = session_svc.with_hooks(Arc::clone(hooks));
         }
@@ -3514,7 +3539,8 @@ pub async fn prepare_gateway_core(
 
     // Wire live chat service (needs state reference, so done after state creation).
     {
-        let broadcaster = Arc::new(GatewayApprovalBroadcaster::new(Arc::clone(&state)));
+        let broadcaster: Arc<dyn moltis_tools::exec::ApprovalBroadcaster> =
+            Arc::new(GatewayApprovalBroadcaster::new(Arc::clone(&state)));
         let env_provider: Arc<dyn EnvVarProvider> = credential_store.clone();
         let eq = cron_service.events_queue().clone();
         let cs = Arc::clone(&cron_service);
@@ -3532,7 +3558,7 @@ pub async fn prepare_gateway_core(
                 config.tools.exec.default_timeout_secs,
             ))
             .with_max_output_bytes(config.tools.exec.max_output_bytes)
-            .with_approval(Arc::clone(&approval_manager), broadcaster)
+            .with_approval(Arc::clone(&approval_manager), Arc::clone(&broadcaster))
             .with_sandbox_router(Arc::clone(&sandbox_router))
             .with_env_provider(Arc::clone(&env_provider))
             .with_completion_callback(exec_cb);
@@ -3578,24 +3604,21 @@ pub async fn prepare_gateway_core(
         {
             use moltis_config::schema::FsBinaryPolicy;
             let fs_cfg = &config.tools.fs;
-            let path_policy =
-                match moltis_tools::fs::FsPathPolicy::new(&fs_cfg.allow_paths, &fs_cfg.deny_paths) {
-                    Ok(p) => {
-                        if p.is_empty() {
-                            None
-                        } else {
-                            Some(p)
-                        }
-                    },
-                    Err(e) => {
-                        warn!(error = %e, "invalid tools.fs path policy — fs tools will run without path allow/deny");
+            let path_policy = match moltis_tools::fs::FsPathPolicy::new(
+                &fs_cfg.allow_paths,
+                &fs_cfg.deny_paths,
+            ) {
+                Ok(p) => {
+                    if p.is_empty() {
                         None
-                    },
-                };
-            let fs_state = if fs_cfg.track_reads {
-                Some(moltis_tools::fs::new_fs_state(fs_cfg.must_read_before_write))
-            } else {
-                None
+                    } else {
+                        Some(p)
+                    }
+                },
+                Err(e) => {
+                    warn!(error = %e, "invalid tools.fs path policy — fs tools will run without path allow/deny");
+                    None
+                },
             };
             let workspace_root = fs_cfg.workspace_root.as_ref().map(PathBuf::from);
             let binary_policy = match fs_cfg.binary_policy {
@@ -3611,15 +3634,22 @@ pub async fn prepare_gateway_core(
             };
             let ctx = moltis_tools::fs::FsToolsContext {
                 workspace_root,
-                fs_state,
+                fs_state: shared_fs_state.clone(),
                 path_policy,
                 binary_policy,
                 respect_gitignore: fs_cfg.respect_gitignore,
                 checkpoint_manager,
                 sandbox_router: Some(Arc::clone(&sandbox_router)),
+                approval_manager: fs_cfg
+                    .require_approval
+                    .then(|| Arc::clone(&approval_manager)),
+                broadcaster: fs_cfg.require_approval.then(|| Arc::clone(&broadcaster)),
                 context_window_tokens: fs_cfg.context_window_tokens,
             };
             moltis_tools::fs::register_fs_tools(&mut tool_registry, ctx);
+            if let Some(message) = fs_tools_host_warning_message(&sandbox_router) {
+                warn!("{message}");
+            }
         }
         #[cfg(feature = "wasm")]
         {
@@ -5317,6 +5347,68 @@ mod tests {
         let manager = approval_manager_from_config(&cfg);
         assert_eq!(manager.mode, ApprovalMode::OnMiss);
         assert_eq!(manager.security_level, SecurityLevel::Allowlist);
+    }
+
+    #[cfg(feature = "fs-tools")]
+    #[test]
+    fn fs_tools_host_warning_message_only_triggers_without_real_backend() {
+        use {
+            moltis_tools::{
+                exec::{ExecOpts, ExecResult},
+                sandbox::{Sandbox, SandboxId},
+            },
+            std::sync::Arc,
+        };
+
+        struct TestRealSandbox;
+
+        #[async_trait]
+        impl Sandbox for TestRealSandbox {
+            fn backend_name(&self) -> &'static str {
+                "test-real"
+            }
+
+            async fn ensure_ready(
+                &self,
+                _id: &SandboxId,
+                _image_override: Option<&str>,
+            ) -> moltis_tools::Result<()> {
+                Ok(())
+            }
+
+            async fn exec(
+                &self,
+                _id: &SandboxId,
+                _command: &str,
+                _opts: &ExecOpts,
+            ) -> moltis_tools::Result<ExecResult> {
+                Ok(ExecResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                })
+            }
+
+            async fn cleanup(&self, _id: &SandboxId) -> moltis_tools::Result<()> {
+                Ok(())
+            }
+        }
+
+        let real_backend: Arc<dyn Sandbox> = Arc::new(TestRealSandbox);
+        let real_router = moltis_tools::sandbox::SandboxRouter::with_backend(
+            moltis_tools::sandbox::SandboxConfig::default(),
+            real_backend,
+        );
+        assert!(fs_tools_host_warning_message(&real_router).is_none());
+
+        let no_backend: Arc<dyn Sandbox> = Arc::new(moltis_tools::sandbox::NoSandbox);
+        let no_router = moltis_tools::sandbox::SandboxRouter::with_backend(
+            moltis_tools::sandbox::SandboxConfig::default(),
+            no_backend,
+        );
+        let warning = fs_tools_host_warning_message(&no_router).expect("warning");
+        assert!(warning.contains("fs tools are registered"));
+        assert!(warning.contains("[tools.fs].allow_paths"));
     }
 
     #[cfg(feature = "local-llm")]

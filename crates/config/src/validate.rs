@@ -279,6 +279,7 @@ fn build_schema_map() -> KnownKeys {
                     ("deny_paths", Array(Box::new(Leaf))),
                     ("track_reads", Leaf),
                     ("must_read_before_write", Leaf),
+                    ("require_approval", Leaf),
                     ("max_read_bytes", Leaf),
                     ("binary_policy", Leaf),
                     ("respect_gitignore", Leaf),

@@ -340,6 +340,10 @@ must_read_before_write = false    # Refuse Write/Edit/MultiEdit calls targeting
                                   # Requires track_reads = true. Returns a typed
                                   # must_read_before_write payload the LLM can
                                   # branch on.
+require_approval = true           # When true, Write/Edit/MultiEdit pause for
+                                  # explicit operator approval before mutating.
+                                  # Uses the existing approval queue and will
+                                  # time out if nobody approves the request.
 max_read_bytes = 10485760         # Maximum bytes a single Read can return before
                                   # the file is rejected with a typed "too_large"
                                   # payload (10 MB).

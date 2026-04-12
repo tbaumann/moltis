@@ -18,15 +18,18 @@ use moltis_metrics::{counter, labels, tools as tools_metrics};
 
 use crate::{
     Result,
+    approval::ApprovalManager,
     checkpoints::CheckpointManager,
     error::Error,
+    exec::ApprovalBroadcaster,
     fs::{
         edit::{apply_edit, persist_atomic},
         sandbox_bridge::{SandboxReadResult, ensure_sandbox, sandbox_read, sandbox_write},
         shared::{
             DEFAULT_MAX_READ_BYTES, FsPathPolicy, FsState, canonicalize_existing,
             enforce_must_read_before_write, enforce_path_policy, ensure_regular_file,
-            note_fs_mutation, reject_if_symlink, session_key_from,
+            note_fs_mutation, reject_if_symlink, require_absolute, require_fs_mutation_approval,
+            session_key_from,
         },
     },
     sandbox::SandboxRouter,
@@ -39,6 +42,8 @@ pub struct MultiEditTool {
     path_policy: Option<FsPathPolicy>,
     checkpoint_manager: Option<Arc<CheckpointManager>>,
     sandbox_router: Option<Arc<SandboxRouter>>,
+    approval_manager: Option<Arc<ApprovalManager>>,
+    broadcaster: Option<Arc<dyn ApprovalBroadcaster>>,
 }
 
 impl MultiEditTool {
@@ -77,6 +82,18 @@ impl MultiEditTool {
         self
     }
 
+    /// Attach approval gating for file mutations.
+    #[must_use]
+    pub fn with_approval(
+        mut self,
+        manager: Arc<ApprovalManager>,
+        broadcaster: Arc<dyn ApprovalBroadcaster>,
+    ) -> Self {
+        self.approval_manager = Some(manager);
+        self.broadcaster = Some(broadcaster);
+        self
+    }
+
     #[instrument(skip(self, edits), fields(file_path = %file_path, edit_count = edits.len()))]
     async fn multi_edit_impl(
         &self,
@@ -87,12 +104,19 @@ impl MultiEditTool {
         if edits.is_empty() {
             return Err(Error::message("'edits' must contain at least one edit"));
         }
+        require_absolute(file_path, "file_path")?;
+        let approval_request = format!("MultiEdit {file_path}");
 
         // Sandbox dispatch: read once, apply all edits in host memory,
         // write the final buffer back through the bridge atomically.
         if let Some(ref router) = self.sandbox_router
             && router.is_sandboxed(session_key).await
         {
+            if let Some(ref policy) = self.path_policy
+                && let Some(payload) = enforce_path_policy(policy, std::path::Path::new(file_path))
+            {
+                return Ok(payload);
+            }
             let (backend, id) = ensure_sandbox(router, session_key).await?;
             let read_result =
                 sandbox_read(&backend, &id, file_path, DEFAULT_MAX_READ_BYTES).await?;
@@ -128,6 +152,12 @@ impl MultiEditTool {
                 buffer = outcome.content;
             }
 
+            require_fs_mutation_approval(
+                self.approval_manager.as_ref(),
+                self.broadcaster.as_ref(),
+                &approval_request,
+            )
+            .await?;
             if let Some(payload) =
                 sandbox_write(&backend, &id, file_path, buffer.as_bytes()).await?
             {
@@ -185,6 +215,13 @@ impl MultiEditTool {
             }
             buffer = outcome.content;
         }
+
+        require_fs_mutation_approval(
+            self.approval_manager.as_ref(),
+            self.broadcaster.as_ref(),
+            &approval_request,
+        )
+        .await?;
 
         // Optional checkpoint before the whole batch lands.
         let checkpoint_id = if let Some(ref manager) = self.checkpoint_manager {

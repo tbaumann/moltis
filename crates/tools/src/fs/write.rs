@@ -18,13 +18,16 @@ use std::sync::Arc;
 
 use crate::{
     Result,
+    approval::ApprovalManager,
     checkpoints::CheckpointManager,
     error::Error,
+    exec::ApprovalBroadcaster,
     fs::{
         sandbox_bridge::{ensure_sandbox, sandbox_write},
         shared::{
             FsPathPolicy, FsState, canonicalize_for_create, enforce_must_read_before_write,
-            enforce_path_policy, note_fs_mutation, reject_if_symlink, session_key_from,
+            enforce_path_policy, note_fs_mutation, reject_if_symlink, require_absolute,
+            require_fs_mutation_approval, session_key_from,
         },
     },
     sandbox::SandboxRouter,
@@ -37,6 +40,8 @@ pub struct WriteTool {
     path_policy: Option<FsPathPolicy>,
     checkpoint_manager: Option<Arc<CheckpointManager>>,
     sandbox_router: Option<Arc<SandboxRouter>>,
+    approval_manager: Option<Arc<ApprovalManager>>,
+    broadcaster: Option<Arc<dyn ApprovalBroadcaster>>,
 }
 
 impl WriteTool {
@@ -75,8 +80,23 @@ impl WriteTool {
         self
     }
 
+    /// Attach approval gating for file mutations.
+    #[must_use]
+    pub fn with_approval(
+        mut self,
+        manager: Arc<ApprovalManager>,
+        broadcaster: Arc<dyn ApprovalBroadcaster>,
+    ) -> Self {
+        self.approval_manager = Some(manager);
+        self.broadcaster = Some(broadcaster);
+        self
+    }
+
     #[instrument(skip(self, content), fields(file_path = %file_path, bytes = content.len()))]
     async fn write_impl(&self, file_path: &str, content: &str, session_key: &str) -> Result<Value> {
+        require_absolute(file_path, "file_path")?;
+        let approval_request = format!("Write {file_path}");
+
         // Sandbox dispatch: round-trip through the bridge when sandboxed.
         // Sandbox path skips host-side canonicalization, symlink check,
         // and must-read-before-write because those semantics are enforced
@@ -84,6 +104,17 @@ impl WriteTool {
         if let Some(ref router) = self.sandbox_router
             && router.is_sandboxed(session_key).await
         {
+            if let Some(ref policy) = self.path_policy
+                && let Some(payload) = enforce_path_policy(policy, std::path::Path::new(file_path))
+            {
+                return Ok(payload);
+            }
+            require_fs_mutation_approval(
+                self.approval_manager.as_ref(),
+                self.broadcaster.as_ref(),
+                &approval_request,
+            )
+            .await?;
             let (backend, id) = ensure_sandbox(router, session_key).await?;
             if let Some(payload) =
                 sandbox_write(&backend, &id, file_path, content.as_bytes()).await?
@@ -127,12 +158,19 @@ impl WriteTool {
             {
                 return Ok(payload);
             }
+        }
 
-            // Optional checkpoint backup before the mutation lands.
-            if let Some(ref manager) = self.checkpoint_manager {
-                let record = manager.checkpoint_path(&canonical, "Write").await?;
-                checkpoint_id = Some(record.id);
-            }
+        require_fs_mutation_approval(
+            self.approval_manager.as_ref(),
+            self.broadcaster.as_ref(),
+            &approval_request,
+        )
+        .await?;
+
+        // Optional checkpoint backup before the mutation lands.
+        if target_exists && let Some(ref manager) = self.checkpoint_manager {
+            let record = manager.checkpoint_path(&canonical, "Write").await?;
+            checkpoint_id = Some(record.id);
         }
 
         let parent = canonical

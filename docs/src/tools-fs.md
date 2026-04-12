@@ -155,6 +155,10 @@ track_reads = false
 # Requires track_reads = true.
 must_read_before_write = false
 
+# When true, Write/Edit/MultiEdit pause for explicit operator approval
+# before mutating a file.
+require_approval = true
+
 # Read size cap. Files larger than this return a typed "too_large" payload.
 max_read_bytes = 10485760  # 10 MB
 
@@ -172,6 +176,10 @@ respect_gitignore = true
 # checkpoints grow with agent activity.
 checkpoint_before_mutation = false
 ```
+
+`require_approval` reuses the existing approval queue and WebSocket
+prompting path. If nobody approves the request, the mutation times out
+instead of landing silently.
 
 ## Policy Integration
 
@@ -193,14 +201,14 @@ but can't touch anything outside it:
 
 ```toml
 [tools.policy]
-profile = "coding"
-deny = ["Write", "Edit", "MultiEdit"]
+allow = ["exec", "browser", "memory", "Read", "Glob", "Grep"]
 
 [tools.fs]
 workspace_root = "/home/user/project"
 allow_paths = ["/home/user/project/**"]
 deny_paths  = ["/home/user/project/.env*", "/home/user/project/secrets/**"]
 respect_gitignore = true
+require_approval = true
 ```
 
 ## Structured Audit
@@ -220,6 +228,6 @@ the second big win (alongside model-quality improvements) that motivated
 - [Hooks](hooks.md) — `BeforeToolCall` and `ToolResultPersist` receive
   structured payloads for each fs tool call, so policy hooks can inspect
   typed parameters instead of parsing shell strings.
-- [Sandbox](sandbox.md) — phase 2 of the fs-tools epic will route
-  mutations through the sandbox when the session is sandboxed. Until it
-  lands, fs tools operate on the gateway host only.
+- [Sandbox](sandbox.md) — fs tools route through the sandbox when the
+  session is sandboxed. If no real sandbox backend is available, Moltis
+  warns at startup and the tools operate on the gateway host.

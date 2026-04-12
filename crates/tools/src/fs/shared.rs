@@ -16,7 +16,15 @@ use {
     tokio::fs,
 };
 
-use crate::{Result, error::Error};
+use {
+    crate::{
+        Result,
+        approval::{ApprovalDecision, ApprovalManager},
+        error::Error,
+        exec::ApprovalBroadcaster,
+    },
+    tracing::{info, warn},
+};
 
 /// Number of consecutive identical reads before a `loop_warning` is added
 /// to Read's response payload. Ported from hermes's `_read_tracker`.
@@ -371,6 +379,40 @@ fn path_denied_payload(path: &Path, reason: &str) -> Value {
     })
 }
 
+/// Require explicit operator approval before a filesystem mutation.
+///
+/// The gateway threads the existing approval manager and broadcaster
+/// into fs tools only when `[tools.fs].require_approval = true`, so
+/// `None` means "approval disabled" rather than "misconfigured".
+pub async fn require_fs_mutation_approval(
+    approval_manager: Option<&Arc<ApprovalManager>>,
+    broadcaster: Option<&Arc<dyn ApprovalBroadcaster>>,
+    request: &str,
+) -> Result<()> {
+    let Some(manager) = approval_manager else {
+        return Ok(());
+    };
+
+    info!(request, "fs mutation needs approval, waiting...");
+    let (request_id, rx) = manager.create_request(request).await;
+
+    if let Some(broadcaster) = broadcaster
+        && let Err(error) = broadcaster.broadcast_request(&request_id, request).await
+    {
+        warn!(%error, request, "failed to broadcast fs approval request");
+    }
+
+    match manager.wait_for_decision(rx).await {
+        ApprovalDecision::Approved => Ok(()),
+        ApprovalDecision::Denied => Err(Error::message(format!(
+            "filesystem mutation denied by user: {request}"
+        ))),
+        ApprovalDecision::Timeout => Err(Error::message(format!(
+            "filesystem approval timed out for: {request}"
+        ))),
+    }
+}
+
 /// Check the must-read-before-write invariant against the shared state.
 ///
 /// When `fs_state` is `Some` and [`FsStateInner::must_read_before_write`]
@@ -448,6 +490,11 @@ impl FsStateInner {
         self.sessions
             .get(session_key)
             .is_some_and(|state| state.read_files.contains(path))
+    }
+
+    /// Remove all tracking state for a completed session.
+    pub fn remove_session(&mut self, session_key: &str) {
+        self.sessions.remove(session_key);
     }
 
     /// Note a mutation to `path`: reset the loop counter if the most
@@ -907,6 +954,19 @@ mod tests {
     async fn canonicalize_for_create_rejects_relative() {
         let err = canonicalize_for_create("out.txt").await.unwrap_err();
         assert!(err.to_string().contains("must be an absolute path"));
+    }
+
+    #[test]
+    fn fs_state_remove_session_drops_read_history() {
+        let state = new_fs_state(false);
+        let mut guard = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _ = guard.record_read("session-a", PathBuf::from("/tmp/demo.txt"), 0, 10);
+        assert!(guard.has_been_read("session-a", Path::new("/tmp/demo.txt")));
+
+        guard.remove_session("session-a");
+        assert!(!guard.has_been_read("session-a", Path::new("/tmp/demo.txt")));
     }
 
     #[tokio::test]
