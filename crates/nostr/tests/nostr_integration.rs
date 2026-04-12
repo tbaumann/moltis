@@ -178,22 +178,19 @@ async fn send_and_receive_dm() {
                             break;
                         }
                     },
-                    RelayPoolNotification::Message { message, .. } => {
-                        if let RelayMessage::Event { event, .. } = message {
-                            if event.kind == Kind::EncryptedDirectMessage
-                                && event.pubkey == sender_keys.public_key()
-                            {
-                                let decrypted = nip04::decrypt(
-                                    bot_keys.secret_key(),
-                                    &event.pubkey,
-                                    &event.content,
-                                ).expect("decrypt via Message");
-                                println!("Received DM via Message: {decrypted}");
-                                assert_eq!(decrypted, test_msg);
-                                received = true;
-                                break;
-                            }
-                        }
+                    RelayPoolNotification::Message { message: RelayMessage::Event { event, .. }, .. }
+                        if event.kind == Kind::EncryptedDirectMessage
+                            && event.pubkey == sender_keys.public_key() =>
+                    {
+                        let decrypted = nip04::decrypt(
+                            bot_keys.secret_key(),
+                            &event.pubkey,
+                            &event.content,
+                        ).expect("decrypt via Message");
+                        println!("Received DM via Message: {decrypted}");
+                        assert_eq!(decrypted, test_msg);
+                        received = true;
+                        break;
                     },
                     _ => {},
                 }

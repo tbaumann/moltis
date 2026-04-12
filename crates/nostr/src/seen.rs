@@ -87,6 +87,12 @@ impl SeenTracker {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+
+    /// Whether the tracker is empty.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 impl Default for SeenTracker {
