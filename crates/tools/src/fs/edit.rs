@@ -96,28 +96,38 @@ pub(crate) fn apply_edit(
 
     // Recovery 2: smart-quote normalization (ported from Claude Code's
     // J_6/As4). Fold curly quotes to straight quotes in both the needle
-    // and the file content; if the normalized versions match, replace
-    // the original substring in the file so the file's quote style is
+    // and the file content. If the normalized versions match, splice
+    // `new_string` into the *original* content at the matched positions
+    // so the file's curly-quote style outside the replaced span is
     // preserved.
     let norm_old = normalize_smart_quotes(old_string);
     let norm_content = normalize_smart_quotes(content);
     if norm_old != old_string || norm_content != content {
         let sq_count = norm_content.matches(&norm_old).count();
         if sq_count > 0 {
-            // Find the byte offset of the first match in the normalized
-            // content, then map back to the original content. Because
-            // smart-quote folding is 1-char → 1-char (both are 1+ bytes
-            // in UTF-8 but the char count is preserved), char-index
-            // mapping works via char offsets.
-            let norm_new = normalize_smart_quotes(new_string);
-            return finish_edit(
-                &norm_content,
-                &norm_old,
-                &norm_new,
-                replace_all,
-                sq_count,
-                true,
-            );
+            if sq_count > 1 && !replace_all {
+                return Err(Error::message(format!(
+                    "'old_string' matches {sq_count} locations in the file (after \
+                     smart-quote normalization); refusing to edit. Supply a larger \
+                     `old_string` with more context to make the match unique, or \
+                     set `replace_all=true`."
+                )));
+            }
+            // Map normalized char offsets back to original byte offsets
+            // so we splice into the real content without corrupting
+            // surrounding curly quotes.
+            let updated =
+                splice_via_normalized(content, &norm_content, &norm_old, new_string, replace_all);
+            let replacements = if replace_all {
+                sq_count
+            } else {
+                1
+            };
+            return Ok(EditOutcome {
+                content: updated,
+                replacements,
+                recovered_via_crlf: true, // reuse flag for "recovery fired"
+            });
         }
     }
 
@@ -130,6 +140,52 @@ pub(crate) fn apply_edit(
 ///
 /// Ported from Claude Code's `As4` function:
 /// `\u{2018}`→`'`, `\u{2019}`→`'`, `\u{201C}`→`"`, `\u{201D}`→`"`
+/// Splice `new_string` into the original `content` at positions found
+/// via the normalized (smart-quote-folded) copies. This avoids the bug
+/// where passing `&norm_content` to `finish_edit` would silently
+/// convert every curly quote in the entire file to ASCII.
+fn splice_via_normalized(
+    content: &str,
+    norm_content: &str,
+    norm_old: &str,
+    new_string: &str,
+    replace_all: bool,
+) -> String {
+    // Smart-quote folding is 1-char → 1-char so char-count is preserved
+    // between content and norm_content. We find match char-offsets in
+    // norm_content and map them back to byte-offsets in content.
+    let content_chars: Vec<(usize, char)> = content.char_indices().collect();
+    let mut result = String::with_capacity(content.len());
+    let mut last_byte = 0;
+    let norm_old_chars = norm_old.chars().count();
+
+    for (char_offset, _) in norm_content.match_indices(norm_old) {
+        // char_offset is a BYTE offset in norm_content. Convert to
+        // a char index, then map to a byte offset in content.
+        let match_char_start = norm_content[..char_offset].chars().count();
+        let match_char_end = match_char_start + norm_old_chars;
+
+        let orig_byte_start = content_chars
+            .get(match_char_start)
+            .map(|(i, _)| *i)
+            .unwrap_or(content.len());
+        let orig_byte_end = content_chars
+            .get(match_char_end)
+            .map(|(i, _)| *i)
+            .unwrap_or(content.len());
+
+        result.push_str(&content[last_byte..orig_byte_start]);
+        result.push_str(new_string);
+        last_byte = orig_byte_end;
+
+        if !replace_all {
+            break;
+        }
+    }
+    result.push_str(&content[last_byte..]);
+    result
+}
+
 fn normalize_smart_quotes(s: &str) -> String {
     s.replace(['\u{2018}', '\u{2019}'], "'")
         .replace(['\u{201C}', '\u{201D}'], "\"")

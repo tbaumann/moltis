@@ -289,7 +289,11 @@ pub async fn sandbox_grep(
 ) -> Result<Value> {
     let pattern_q = shell_single_quote(opts.pattern);
     let path_q = shell_single_quote(opts.path);
-    let mut flags: Vec<&str> = vec!["-r", "-E"];
+    // Use PCRE (-P) to match the host path's Rust-regex syntax as
+    // closely as possible (\d, \w, \b, lookaheads). GNU grep supports
+    // -P; if it's not available (BusyBox, Alpine) the script falls
+    // back to -E (POSIX ERE) which lacks those features.
+    let mut flags: Vec<&str> = vec!["-r", "-P"];
     if opts.case_insensitive {
         flags.push("-i");
     }
@@ -316,11 +320,18 @@ pub async fn sandbox_grep(
             .join(" ")
     };
     let flags_str = flags.join(" ");
-    // grep exits 0 on match, 1 on no match, 2 on error. Treat 0 and 1
-    // as success so empty-result calls don't error.
+    // Try PCRE first; fall back to ERE if -P is not supported (BusyBox,
+    // Alpine). grep exits 0 on match, 1 on no match, 2 on error.
+    // Treat 0 and 1 as success so empty-result calls don't error.
+    let flags_str_ere = flags_str.replace("-P", "-E");
     let script = format!(
         "grep {flags_str} {include_args} -- {pattern_q} {path_q} 2>/dev/null; \
-         rc=$?; if [ $rc -eq 1 ]; then exit 0; else exit $rc; fi"
+         rc=$?; \
+         if [ $rc -eq 2 ]; then \
+           grep {flags_str_ere} {include_args} -- {pattern_q} {path_q} 2>/dev/null; \
+           rc=$?; \
+         fi; \
+         if [ $rc -eq 1 ]; then exit 0; else exit $rc; fi"
     );
     let result = backend.exec(id, &script, &default_opts()).await?;
     if result.exit_code != 0 {
