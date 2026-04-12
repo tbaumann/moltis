@@ -52,17 +52,22 @@ ALLOW=(
   crates/web/src/terminal.rs
 )
 
-# Build associative array for O(1) lookup.
-declare -A ALLOWED
-for f in "${ALLOW[@]}"; do
-  ALLOWED["$f"]=1
-done
+# Check if a file is in the allowlist (bash 3.2 compatible).
+is_allowed() {
+  local needle="$1"
+  for f in "${ALLOW[@]}"; do
+    if [[ "$f" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 violations=0
 
 while IFS=$'\t' read -r lines file; do
   rel="${file#./}"
-  if [[ -n "${ALLOWED[$rel]:-}" ]]; then
+  if is_allowed "$rel"; then
     continue
   fi
   echo "FAIL: $rel ($lines lines > $MAX_LINES)"
