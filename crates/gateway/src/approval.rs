@@ -171,9 +171,9 @@ impl ApprovalBroadcaster for GatewayApprovalBroadcaster {
 
 /// Truncate a command string for safe display in channel notifications.
 /// Prevents leaking full command text (which may contain secrets) to group chats.
-const MAX_COMMAND_PREVIEW_LEN: usize = 80;
+pub(crate) const MAX_COMMAND_PREVIEW_LEN: usize = 80;
 
-fn truncate_command_preview(command: &str, max_len: usize) -> Cow<'_, str> {
+pub(crate) fn truncate_command_preview(command: &str, max_len: usize) -> Cow<'_, str> {
     if command.len() <= max_len {
         Cow::Borrowed(command)
     } else {

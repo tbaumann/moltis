@@ -134,7 +134,16 @@ async fn is_sender_on_allowlist(
     };
     let allowlist = config.allowlist();
     // Empty allowlist = open policy → no explicit authorization.
-    !allowlist.is_empty() && moltis_channels::gating::is_allowed(sender_id, allowlist)
+    if allowlist.is_empty() {
+        return false;
+    }
+    // Check the full sender_id first, then try the user part before '@'
+    // (WhatsApp JIDs are e.g. "15551234567@s.whatsapp.net" but allowlists
+    // use plain phone numbers like "15551234567").
+    moltis_channels::gating::is_allowed(sender_id, allowlist)
+        || sender_id
+            .split_once('@')
+            .is_some_and(|(user, _)| moltis_channels::gating::is_allowed(user, allowlist))
 }
 
 fn is_attachable_session(entry: &SessionEntry) -> bool {
@@ -196,9 +205,11 @@ fn format_attachable_sessions_list(sessions: &[SessionEntry], current_session_ke
 }
 
 fn format_pending_approvals_list(requests: &[PendingApprovalView]) -> String {
+    use crate::approval::{MAX_COMMAND_PREVIEW_LEN, truncate_command_preview};
     let mut lines = Vec::new();
     for (i, request) in requests.iter().enumerate() {
-        lines.push(format!("{}. `{}`", i + 1, request.command));
+        let preview = truncate_command_preview(&request.command, MAX_COMMAND_PREVIEW_LEN);
+        lines.push(format!("{}. `{}`", i + 1, preview));
     }
     lines.push("\nUse /approve N or /deny N.".to_string());
     lines.join("\n")
