@@ -371,8 +371,17 @@ pub trait ChannelEventSink: Send + Sync {
 
     /// Dispatch a slash command (e.g. "new", "clear", "compact", "context")
     /// and return a text result to send back to the channel.
-    async fn dispatch_command(&self, command: &str, reply_to: ChannelReplyTarget)
-    -> Result<String>;
+    ///
+    /// `sender_id` identifies the message sender. Privileged commands
+    /// (`/approve`, `/deny`) are restricted to senders on the channel
+    /// account's allowlist — authorization is enforced centrally by the
+    /// gateway, so channel implementations do not need to handle it.
+    async fn dispatch_command(
+        &self,
+        command: &str,
+        reply_to: ChannelReplyTarget,
+        sender_id: Option<&str>,
+    ) -> Result<String>;
 
     /// Request disabling a channel account due to a runtime error.
     ///
@@ -491,6 +500,9 @@ pub struct ChannelMessageMeta {
     /// Default model configured for this channel account.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Default agent configured for this channel account or chat override.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     /// Filename of saved voice audio (set by `save_channel_voice`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_filename: Option<String>,
@@ -939,6 +951,7 @@ mod tests {
             &self,
             _command: &str,
             _reply_to: ChannelReplyTarget,
+            _sender_id: Option<&str>,
         ) -> Result<String> {
             Ok(String::new())
         }

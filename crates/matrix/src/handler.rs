@@ -328,6 +328,9 @@ pub async fn handle_room_message(
         sender_id: Some(sender_id.clone()),
         message_kind: Some(kind),
         model: config.resolve_model(&room_id, &sender_id).map(String::from),
+        agent_id: config
+            .resolve_agent_id(&room_id, &sender_id)
+            .map(String::from),
         audio_filename: None,
     };
 
@@ -396,7 +399,8 @@ pub async fn handle_room_message(
             let response = if cmd_name == "help" {
                 Ok(HELP_TEXT.to_string())
             } else {
-                sink.dispatch_command(cmd_text, reply_to).await
+                sink.dispatch_command(cmd_text, reply_to, Some(&sender_id))
+                    .await
             };
             let text = match response {
                 Ok(msg) => msg,
