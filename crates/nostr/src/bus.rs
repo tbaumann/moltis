@@ -223,10 +223,10 @@ async fn handle_event(
         },
     };
 
-    // 7. Size validation
+    // 7. Size validation — truncate at a safe UTF-8 boundary
     let text = if plaintext.len() > MAX_MESSAGE_BYTES {
         tracing::warn!(account_id, len = plaintext.len(), "DM exceeds size limit");
-        &plaintext[..MAX_MESSAGE_BYTES]
+        &plaintext[..plaintext.floor_char_boundary(MAX_MESSAGE_BYTES)]
     } else {
         &plaintext
     };
