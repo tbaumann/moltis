@@ -1,18 +1,47 @@
 use super::*;
 
-fn is_channel_session_key(key: &str) -> bool {
-    key.starts_with("telegram:")
-        || key.starts_with("msteams:")
-        || key.starts_with("discord:")
-        || key.starts_with("slack:")
-        || key.starts_with("matrix:")
+fn default_channel_session_key(target: &moltis_channels::ChannelReplyTarget) -> String {
+    match &target.thread_id {
+        Some(thread_id) => format!(
+            "{}:{}:{}:{}",
+            target.channel_type, target.account_id, target.chat_id, thread_id
+        ),
+        None => format!(
+            "{}:{}:{}",
+            target.channel_type, target.account_id, target.chat_id
+        ),
+    }
 }
 
-fn is_archivable_entry(entry: &moltis_sessions::metadata::SessionEntry) -> bool {
-    entry.key != "main"
-        && !entry.key.starts_with("cron:")
-        && !is_channel_session_key(&entry.key)
-        && entry.channel_binding.is_none()
+async fn is_current_channel_session(
+    metadata: &SqliteSessionMetadata,
+    entry: &moltis_sessions::metadata::SessionEntry,
+) -> bool {
+    let Some(binding_json) = entry.channel_binding.as_deref() else {
+        return false;
+    };
+    let Ok(target) = serde_json::from_str::<moltis_channels::ChannelReplyTarget>(binding_json)
+    else {
+        return false;
+    };
+
+    let active_key = metadata
+        .get_active_session(
+            target.channel_type.as_str(),
+            &target.account_id,
+            &target.chat_id,
+            target.thread_id.as_deref(),
+        )
+        .await
+        .unwrap_or_else(|| default_channel_session_key(&target));
+    active_key == entry.key
+}
+
+async fn is_archivable_entry(
+    metadata: &SqliteSessionMetadata,
+    entry: &moltis_sessions::metadata::SessionEntry,
+) -> bool {
+    entry.key != "main" && !is_current_channel_session(metadata, entry).await
 }
 
 /// Live session service backed by JSONL store + SQLite metadata.
@@ -251,26 +280,7 @@ impl SessionService for LiveSessionService {
         for mut e in all {
             let agent_id = self.resolve_agent_id_for_entry(&e, false).await;
             // Check if this session is the active one for its channel binding.
-            let active_channel = if let Some(ref binding_json) = e.channel_binding {
-                if let Ok(target) =
-                    serde_json::from_str::<moltis_channels::ChannelReplyTarget>(binding_json)
-                {
-                    self.metadata
-                        .get_active_session(
-                            target.channel_type.as_str(),
-                            &target.account_id,
-                            &target.chat_id,
-                            target.thread_id.as_deref(),
-                        )
-                        .await
-                        .map(|k| k == e.key)
-                        .unwrap_or(false)
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
+            let active_channel = is_current_channel_session(&self.metadata, &e).await;
 
             // Backfill preview for sessions that have messages but no preview yet.
             if e.preview.is_none()
@@ -457,7 +467,7 @@ impl SessionService for LiveSessionService {
             .get(key)
             .await
             .ok_or_else(|| format!("session '{key}' not found"))?;
-        if p.archived.is_some() && !is_archivable_entry(&entry) {
+        if p.archived.is_some() && !is_archivable_entry(&self.metadata, &entry).await {
             return Err(ServiceError::message(format!(
                 "session '{key}' cannot be archived"
             )));

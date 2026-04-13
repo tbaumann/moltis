@@ -802,7 +802,41 @@ test.describe("Session management", () => {
 		expect(pageErrors).toEqual([]);
 	});
 
-	test("cron session shows delete button in more controls", async ({ page }) => {
+	test("current channel session hides archive action", async ({ page }) => {
+		const pageErrors = await navigateAndWait(page, "/");
+		await waitForWsConnected(page);
+
+		const channelKey = `telegram:bot:archive-guard-${Date.now()}`;
+		await expectRpcOk(page, "sessions.switch", { key: channelKey });
+
+		const channelItem = page.locator(`#sessionList .session-item[data-session-key="${channelKey}"]`);
+		await expect(channelItem).toBeVisible({ timeout: 10_000 });
+		await channelItem.click();
+
+		await expect
+			.poll(
+				() =>
+					page.evaluate((key) => {
+						const stores = window.__moltis_stores;
+						const session = stores?.sessionStore?.getByKey(key);
+						if (!session) return false;
+						session.activeChannel = true;
+						session.dataVersion.value++;
+						stores.sessionStore.sessions.value = stores.sessionStore.sessions.value.slice();
+						return true;
+					}, channelKey),
+				{ timeout: 10_000 },
+			)
+			.toBe(true);
+
+		await openChatMoreModal(page);
+		await expect(page.locator('#chatMoreModal button[title="Archive session"]')).toHaveCount(0);
+		await closeChatMoreModal(page);
+
+		expect(pageErrors).toEqual([]);
+	});
+
+	test("cron session shows archive and delete buttons in more controls", async ({ page }) => {
 		const pageErrors = await navigateAndWait(page, "/");
 		await waitForWsConnected(page);
 
@@ -839,7 +873,9 @@ test.describe("Session management", () => {
 
 		// Open more controls and verify delete button is visible
 		await openChatMoreModal(page);
+		const archiveBtn = page.locator('#chatMoreModal button[title="Archive session"]');
 		const deleteBtn = page.locator('#chatMoreModal button[title="Delete session"]');
+		await expect(archiveBtn).toBeVisible({ timeout: 5_000 });
 		await expect(deleteBtn).toBeVisible({ timeout: 5_000 });
 
 		// Click delete — should show confirmation since it has messages

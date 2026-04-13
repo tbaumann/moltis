@@ -1172,6 +1172,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_archived_rejects_current_default_channel_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::new(dir.path().to_path_buf()));
+        let pool = sqlite_pool().await;
+        let metadata = Arc::new(SqliteSessionMetadata::new(pool));
+        let binding =
+            r#"{"channel_type":"telegram","account_id":"bot1","chat_id":"123"}"#.to_string();
+        metadata
+            .upsert("telegram:bot1:123", Some("Telegram current".to_string()))
+            .await
+            .unwrap();
+        metadata
+            .set_channel_binding("telegram:bot1:123", Some(binding))
+            .await;
+
+        let svc = LiveSessionService::new(Arc::clone(&store), Arc::clone(&metadata));
+
+        let error = svc
+            .patch(serde_json::json!({ "key": "telegram:bot1:123", "archived": true }))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("cannot be archived"));
+        assert!(!metadata.get("telegram:bot1:123").await.unwrap().archived);
+    }
+
+    #[tokio::test]
+    async fn patch_archived_allows_noncurrent_channel_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::new(dir.path().to_path_buf()));
+        let pool = sqlite_pool().await;
+        let metadata = Arc::new(SqliteSessionMetadata::new(pool));
+        let binding =
+            r#"{"channel_type":"telegram","account_id":"bot1","chat_id":"123"}"#.to_string();
+        metadata
+            .upsert(
+                "session:telegram-archive",
+                Some("Telegram archive".to_string()),
+            )
+            .await
+            .unwrap();
+        metadata
+            .set_channel_binding("session:telegram-archive", Some(binding.clone()))
+            .await;
+        metadata
+            .set_active_session("telegram", "bot1", "123", None, "telegram:bot1:123")
+            .await;
+
+        let svc = LiveSessionService::new(Arc::clone(&store), Arc::clone(&metadata));
+
+        let result = svc
+            .patch(serde_json::json!({ "key": "session:telegram-archive", "archived": true }))
+            .await
+            .unwrap();
+        assert_eq!(result.get("archived").and_then(|v| v.as_bool()), Some(true));
+        assert!(
+            metadata
+                .get("session:telegram-archive")
+                .await
+                .unwrap()
+                .archived
+        );
+    }
+
+    #[tokio::test]
+    async fn patch_archived_allows_cron_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(SessionStore::new(dir.path().to_path_buf()));
+        let pool = sqlite_pool().await;
+        let metadata = Arc::new(SqliteSessionMetadata::new(pool));
+        metadata
+            .upsert("cron:archive-me", Some("Cron archive".to_string()))
+            .await
+            .unwrap();
+
+        let svc = LiveSessionService::new(Arc::clone(&store), Arc::clone(&metadata));
+
+        let result = svc
+            .patch(serde_json::json!({ "key": "cron:archive-me", "archived": true }))
+            .await
+            .unwrap();
+        assert_eq!(result.get("archived").and_then(|v| v.as_bool()), Some(true));
+        assert!(metadata.get("cron:archive-me").await.unwrap().archived);
+    }
+
+    #[tokio::test]
     async fn patch_archived_rejection_does_not_partially_mutate_session() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(SessionStore::new(dir.path().to_path_buf()));
