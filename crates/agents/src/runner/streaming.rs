@@ -107,6 +107,8 @@ pub async fn run_agent_loop_streaming(
     let mut total_tool_calls = 0;
     let mut total_input_tokens: u32 = 0;
     let mut total_output_tokens: u32 = 0;
+    let mut total_cache_read_tokens: u32 = 0;
+    let mut total_cache_write_tokens: u32 = 0;
     let mut server_retries_remaining: u8 = 1;
     let mut rate_limit_retries_remaining: u8 = RATE_LIMIT_MAX_RETRIES;
     let mut rate_limit_backoff_ms: Option<u64> = None;
@@ -221,6 +223,8 @@ pub async fn run_agent_loop_streaming(
             std::collections::HashMap::new();
         let mut input_tokens: u32 = 0;
         let mut output_tokens: u32 = 0;
+        let mut cache_read_tokens: u32 = 0;
+        let mut cache_write_tokens: u32 = 0;
         let mut stream_error: Option<String> = None;
 
         while let Some(event) = stream.next().await {
@@ -266,7 +270,12 @@ pub async fn run_agent_loop_streaming(
                 StreamEvent::Done(usage) => {
                     input_tokens = usage.input_tokens;
                     output_tokens = usage.output_tokens;
-                    debug!(input_tokens, output_tokens, "stream done");
+                    cache_read_tokens = usage.cache_read_tokens;
+                    cache_write_tokens = usage.cache_write_tokens;
+                    debug!(
+                        input_tokens,
+                        output_tokens, cache_read_tokens, cache_write_tokens, "stream done"
+                    );
 
                     #[cfg(feature = "metrics")]
                     {
@@ -356,6 +365,8 @@ pub async fn run_agent_loop_streaming(
 
         total_input_tokens = total_input_tokens.saturating_add(input_tokens);
         total_output_tokens = total_output_tokens.saturating_add(output_tokens);
+        total_cache_read_tokens = total_cache_read_tokens.saturating_add(cache_read_tokens);
+        total_cache_write_tokens = total_cache_write_tokens.saturating_add(cache_write_tokens);
 
         // Finalize tool call arguments from accumulated strings.
         // Use stream_idx_to_vec_pos to map streaming indices (which may not
@@ -384,6 +395,8 @@ pub async fn run_agent_loop_streaming(
             tool_calls_count = tool_calls.len(),
             input_tokens,
             output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
             "streaming LLM response complete"
         );
 
@@ -563,12 +576,14 @@ pub async fn run_agent_loop_streaming(
                 usage: Usage {
                     input_tokens: total_input_tokens,
                     output_tokens: total_output_tokens,
-                    ..Default::default()
+                    cache_read_tokens: total_cache_read_tokens,
+                    cache_write_tokens: total_cache_write_tokens,
                 },
                 request_usage: Usage {
                     input_tokens,
                     output_tokens,
-                    ..Default::default()
+                    cache_read_tokens,
+                    cache_write_tokens,
                 },
                 raw_llm_responses,
             });
