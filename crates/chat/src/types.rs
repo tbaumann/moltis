@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use {
     serde::{Deserialize, Serialize},
     serde_json::Value,
-    tracing::debug,
 };
 
 use moltis_config::{AgentMemoryWriteMode, MemoryStyle, PromptMemoryMode};

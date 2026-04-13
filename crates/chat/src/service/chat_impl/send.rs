@@ -1,10 +1,6 @@
 //! `ChatService` trait implementation for `LiveChatService`.
 
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use {
     serde_json::Value,
@@ -12,30 +8,22 @@ use {
     tracing::{info, warn},
 };
 
-use {
-    moltis_agents::{AgentRunError, UserContent},
-    moltis_config::MessageQueueMode,
-    moltis_providers::model_id::raw_model_id,
-    moltis_service_traits::ServiceResult,
-};
+use {moltis_config::MessageQueueMode, moltis_service_traits::ServiceResult};
+
+#[cfg(feature = "local-llm")]
+use moltis_providers::model_id::raw_model_id;
 
 use crate::{
-    agent_loop::{
-        clear_unsupported_model, compact_session, mark_unsupported_model,
-        run_explicit_shell_command,
-    },
+    agent_loop::run_explicit_shell_command,
     channels::deliver_channel_error,
-    memory_tools::AgentScopedMemoryWriter,
     message::{
-        apply_message_received_rewrite, apply_voice_reply_suffix, infer_reply_medium,
-        to_user_content, user_audio_path_from_params, user_documents_for_persistence,
-        user_documents_from_params,
+        apply_message_received_rewrite, infer_reply_medium, to_user_content,
+        user_audio_path_from_params, user_documents_for_persistence, user_documents_from_params,
     },
     prompt::{
-        apply_request_runtime_context, apply_runtime_tool_filters, build_policy_context,
-        build_prompt_runtime_context, build_tool_context, clear_prompt_memory_snapshot,
-        discover_skills_if_enabled, load_prompt_persona_for_agent, load_prompt_persona_for_session,
-        prompt_build_limits_from_config, resolve_channel_runtime_context, resolve_prompt_agent_id,
+        apply_request_runtime_context, build_prompt_runtime_context, discover_skills_if_enabled,
+        load_prompt_persona_for_agent, load_prompt_persona_for_session,
+        resolve_channel_runtime_context, resolve_prompt_agent_id,
     },
     run_with_tools::run_with_tools,
     streaming::run_streaming,

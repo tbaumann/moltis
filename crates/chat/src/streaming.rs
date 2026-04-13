@@ -19,14 +19,14 @@ use {
         model::{StreamEvent, values_to_chat_messages},
         prompt::{PromptRuntimeContext, build_system_prompt_minimal_runtime_details},
     },
-    moltis_sessions::{PersistedMessage, store::SessionStore},
+    moltis_sessions::store::SessionStore,
 };
 
 use crate::{
     agent_loop::{ChannelStreamDispatcher, clear_unsupported_model, mark_unsupported_model},
     channels::{
         deliver_channel_error, deliver_channel_replies, generate_tts_audio,
-        send_chat_push_notification, send_retry_status_to_channels,
+        send_retry_status_to_channels,
     },
     chat_error::parse_chat_error,
     message::apply_voice_reply_suffix,
@@ -36,6 +36,9 @@ use crate::{
     service::ActiveAssistantDraft,
     types::*,
 };
+
+#[cfg(feature = "push-notifications")]
+use crate::channels::send_chat_push_notification;
 
 const STREAM_RETRYABLE_SERVER_PATTERNS: &[&str] = &[
     "http 500",

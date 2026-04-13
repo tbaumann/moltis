@@ -14,6 +14,7 @@ use crate::{
     agent_loop::ChannelReplyTargetKey, compaction_run, error, runtime::ChatRuntime, types::*,
 };
 
+#[cfg(feature = "push-notifications")]
 pub(crate) async fn send_chat_push_notification(
     state: &Arc<dyn ChatRuntime>,
     session_key: &str,

@@ -10,8 +10,8 @@ use {
 };
 
 use crate::types::{
-    default_agent_memory_file_for_mode, is_prompt_memory_file, memory_style_allows_tools,
-    memory_write_mode_allows_save, validate_agent_memory_target_for_mode,
+    default_agent_memory_file_for_mode, memory_style_allows_tools, memory_write_mode_allows_save,
+    validate_agent_memory_target_for_mode,
 };
 
 pub(crate) const MAX_AGENT_MEMORY_WRITE_BYTES: usize = 50 * 1024;

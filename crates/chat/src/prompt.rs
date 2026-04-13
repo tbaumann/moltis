@@ -2,10 +2,7 @@
 
 use std::sync::Arc;
 
-use {
-    serde_json::Value,
-    tracing::{debug, warn},
-};
+use {serde_json::Value, tracing::warn};
 
 use {
     moltis_agents::prompt::{
@@ -15,7 +12,7 @@ use {
     moltis_config::{AgentMemoryWriteMode, LoadedWorkspaceMarkdown, MemoryStyle, PromptMemoryMode},
     moltis_sessions::{metadata::SessionEntry, state_store::SessionStateStore},
     moltis_skills::discover::SkillDiscoverer,
-    moltis_tools::policy::{PolicyContext, ToolPolicy, resolve_effective_policy},
+    moltis_tools::policy::{PolicyContext, resolve_effective_policy},
 };
 
 use crate::{
@@ -23,8 +20,7 @@ use crate::{
     types::{
         PromptMemoryStatus, PromptPersona, default_user_prompt_timezone, detect_host_sudo_access,
         detect_runtime_shell, memory_style_allows_prompt, normalized_iana_timezone,
-        prompt_now_for_timezone, prompt_sandbox_no_network_state, prompt_today_for_timezone,
-        refresh_runtime_prompt_time, server_prompt_timezone,
+        prompt_sandbox_no_network_state, refresh_runtime_prompt_time, server_prompt_timezone,
     },
 };
 

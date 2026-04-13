@@ -6,7 +6,6 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
     sync::Arc,
-    time::Instant,
 };
 
 use {
@@ -21,35 +20,32 @@ use {
         ChatMessage, UserContent,
         model::values_to_chat_messages,
         prompt::{
-            PromptRuntimeContext, build_system_prompt_minimal_runtime_details,
+            build_system_prompt_minimal_runtime_details,
             build_system_prompt_with_session_runtime_details,
         },
-        tool_registry::ToolRegistry,
     },
     moltis_config::ToolMode,
     moltis_service_traits::{ChatService, ServiceError, ServiceResult},
-    moltis_sessions::{ContentBlock, MessageContent, PersistedMessage, metadata::SessionEntry},
+    moltis_sessions::{ContentBlock, MessageContent, PersistedMessage},
     moltis_tools::policy::{PolicyContext, ToolPolicy},
 };
 
 use crate::{
-    agent_loop::{clear_unsupported_model, effective_tool_mode, mark_unsupported_model},
+    agent_loop::effective_tool_mode,
     channels::notify_channels_of_compaction,
-    chat_error::parse_chat_error,
     compaction_run,
     memory_tools::AgentScopedMemoryWriter,
     message::{
-        apply_voice_reply_suffix, infer_reply_medium, to_user_content, user_audio_path_from_params,
-        user_documents_for_persistence, user_documents_from_params,
+        infer_reply_medium, user_audio_path_from_params, user_documents_for_persistence,
+        user_documents_from_params,
     },
     prompt::{
         apply_request_runtime_context, apply_runtime_tool_filters, build_policy_context,
-        build_prompt_runtime_context, build_tool_context, clear_prompt_memory_snapshot,
-        discover_skills_if_enabled, load_prompt_persona_for_agent, load_prompt_persona_for_session,
+        build_prompt_runtime_context, clear_prompt_memory_snapshot, discover_skills_if_enabled,
+        load_prompt_persona_for_agent, load_prompt_persona_for_session,
         prompt_build_limits_from_config, resolve_prompt_agent_id,
     },
     run_with_tools::run_with_tools,
-    runtime::ChatRuntime,
     streaming::run_streaming,
     types::*,
 };

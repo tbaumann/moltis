@@ -6,7 +6,6 @@ use std::{
     collections::{HashMap, HashSet},
     path::Path,
     sync::Arc,
-    time::Instant,
 };
 
 use {
@@ -16,11 +15,11 @@ use {
         sync::{RwLock, Semaphore},
         task::AbortHandle,
     },
-    tracing::{debug, info, warn},
+    tracing::{debug, warn},
 };
 
 use {
-    moltis_agents::{runner::RunnerEvent, tool_registry::ToolRegistry},
+    moltis_agents::tool_registry::ToolRegistry,
     moltis_providers::ProviderRegistry,
     moltis_sessions::{
         PersistedMessage,

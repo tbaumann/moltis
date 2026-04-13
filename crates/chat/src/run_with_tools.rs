@@ -9,14 +9,13 @@ use std::{
 use {
     serde_json::Value,
     tokio::sync::{Mutex, RwLock},
-    tokio_stream::StreamExt,
     tracing::{info, warn},
 };
 
 use {
     moltis_agents::{
         AgentRunError, ChatMessage, UserContent,
-        model::{StreamEvent, values_to_chat_messages},
+        model::values_to_chat_messages,
         prompt::{
             PromptRuntimeContext, build_system_prompt_minimal_runtime_details,
             build_system_prompt_with_session_runtime_details,
@@ -37,22 +36,24 @@ use crate::{
     channels::{
         deliver_channel_error, deliver_channel_replies, dispatch_document_to_channels,
         document_payload_from_data_uri, document_payload_from_ref, generate_tts_audio,
-        notify_channels_of_compaction, send_chat_push_notification, send_location_to_channels,
-        send_retry_status_to_channels, send_screenshot_to_channels, send_tool_result_to_channels,
-        send_tool_status_to_channels,
+        notify_channels_of_compaction, send_location_to_channels, send_retry_status_to_channels,
+        send_screenshot_to_channels, send_tool_result_to_channels, send_tool_status_to_channels,
     },
     chat_error::parse_chat_error,
     memory_tools::{effective_tool_mode, install_agent_scoped_memory_tools},
     message::apply_voice_reply_suffix,
     models::DisabledModelsStore,
     prompt::{
-        apply_request_runtime_context, apply_runtime_tool_filters, build_policy_context,
-        build_tool_context, prompt_build_limits_from_config, resolve_channel_runtime_context,
+        apply_runtime_tool_filters, build_policy_context, build_tool_context,
+        prompt_build_limits_from_config,
     },
     runtime::ChatRuntime,
     service::{ActiveAssistantDraft, build_tool_call_assistant_message, persist_tool_history_pair},
     types::*,
 };
+
+#[cfg(feature = "push-notifications")]
+use crate::channels::send_chat_push_notification;
 
 pub(crate) async fn run_with_tools(
     persona: PromptPersona,
