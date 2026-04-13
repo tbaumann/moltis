@@ -53,6 +53,12 @@ impl Default for WhisperStt {
 }
 
 impl WhisperStt {
+    fn normalize_base_url(base_url: Option<String>) -> String {
+        base_url
+            .map(|url| url.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| API_BASE.into())
+    }
+
     /// Create a new Whisper STT provider.
     #[must_use]
     pub fn new(api_key: Option<Secret<String>>) -> Self {
@@ -76,7 +82,7 @@ impl WhisperStt {
         Self {
             client: Client::new(),
             api_key,
-            base_url: base_url.unwrap_or_else(|| API_BASE.into()),
+            base_url: Self::normalize_base_url(base_url),
             model: model.unwrap_or_else(|| DEFAULT_MODEL.into()),
             language,
         }
@@ -273,6 +279,13 @@ mod tests {
     }
 
     #[test]
+    fn test_with_custom_base_url_trims_trailing_slash() {
+        let provider =
+            WhisperStt::with_options(None, Some("http://10.1.2.30:8001/".into()), None, None);
+        assert_eq!(provider.base_url, "http://10.1.2.30:8001");
+    }
+
+    #[test]
     fn test_with_options_sets_model_and_language() {
         let provider = WhisperStt::with_options(
             Some(Secret::new("key".into())),
@@ -286,8 +299,7 @@ mod tests {
 
     #[test]
     fn test_with_options_defaults() {
-        let provider =
-            WhisperStt::with_options(Some(Secret::new("key".into())), None, None, None);
+        let provider = WhisperStt::with_options(Some(Secret::new("key".into())), None, None, None);
         assert_eq!(provider.model, DEFAULT_MODEL);
         assert!(provider.language.is_none());
     }

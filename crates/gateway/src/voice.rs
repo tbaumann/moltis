@@ -621,7 +621,7 @@ impl LiveSttService {
         vec![
             (
                 SttProviderId::Whisper,
-                cfg.voice.stt.whisper.api_key.is_some(),
+                cfg.voice.stt.whisper.api_key.is_some() || cfg.voice.stt.whisper.base_url.is_some(),
             ),
             (SttProviderId::Groq, cfg.voice.stt.groq.api_key.is_some()),
             (
@@ -812,7 +812,39 @@ impl SttService for LiveSttService {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 #[cfg(all(test, feature = "voice"))]
 mod tests {
-    use {super::*, secrecy::ExposeSecret, serde_json::json};
+    use {super::*, secrecy::ExposeSecret, serde_json::json, tempfile::TempDir};
+
+    struct VoiceConfigTestGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        _config_dir: TempDir,
+        _data_dir: TempDir,
+    }
+
+    impl VoiceConfigTestGuard {
+        fn with_config(config_toml: &str) -> Self {
+            let lock = crate::config_override_test_lock();
+            let config_dir = tempfile::tempdir()
+                .unwrap_or_else(|error| panic!("config tempdir should be created: {error}"));
+            let data_dir = tempfile::tempdir()
+                .unwrap_or_else(|error| panic!("data tempdir should be created: {error}"));
+            std::fs::write(config_dir.path().join("moltis.toml"), config_toml)
+                .unwrap_or_else(|error| panic!("config should be written: {error}"));
+            moltis_config::set_config_dir(config_dir.path().to_path_buf());
+            moltis_config::set_data_dir(data_dir.path().to_path_buf());
+            Self {
+                _lock: lock,
+                _config_dir: config_dir,
+                _data_dir: data_dir,
+            }
+        }
+    }
+
+    impl Drop for VoiceConfigTestGuard {
+        fn drop(&mut self) {
+            moltis_config::clear_config_dir();
+            moltis_config::clear_data_dir();
+        }
+    }
 
     #[test]
     fn test_resolve_openai_key_prefers_voice_key_over_llm_provider_key() {
@@ -867,6 +899,30 @@ mod tests {
             Some(SttProviderId::Whisper)
         );
         assert!(LiveSttService::resolve_provider(None).is_some());
+    }
+
+    #[test]
+    fn test_live_stt_whisper_base_url_counts_as_configured() {
+        let _guard = VoiceConfigTestGuard::with_config(
+            r#"
+[server]
+port = 18080
+
+[voice.stt.whisper]
+base_url = "http://127.0.0.1:8001/"
+"#,
+        );
+
+        let providers = LiveSttService::list_providers();
+        let whisper = providers
+            .into_iter()
+            .find(|(id, _)| *id == SttProviderId::Whisper);
+
+        assert_eq!(whisper, Some((SttProviderId::Whisper, true)));
+        assert_eq!(
+            LiveSttService::resolve_provider(None),
+            Some(SttProviderId::Whisper)
+        );
     }
 
     #[tokio::test]

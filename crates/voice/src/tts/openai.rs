@@ -61,13 +61,19 @@ impl Default for OpenAiTts {
 }
 
 impl OpenAiTts {
+    fn normalize_base_url(base_url: Option<String>) -> String {
+        base_url
+            .map(|url| url.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| API_BASE.into())
+    }
+
     /// Create a new OpenAI TTS provider.
     #[must_use]
     pub fn new(api_key: Option<Secret<String>>) -> Self {
         Self {
             client: Client::new(),
             api_key,
-            base_url: API_BASE.into(),
+            base_url: Self::normalize_base_url(None),
             default_voice: DEFAULT_VOICE.into(),
             default_model: DEFAULT_MODEL.into(),
         }
@@ -84,7 +90,7 @@ impl OpenAiTts {
         Self {
             client: Client::new(),
             api_key,
-            base_url: base_url.unwrap_or_else(|| API_BASE.into()),
+            base_url: Self::normalize_base_url(base_url),
             default_voice: voice.unwrap_or_else(|| DEFAULT_VOICE.into()),
             default_model: model.unwrap_or_else(|| DEFAULT_MODEL.into()),
         }
@@ -266,6 +272,13 @@ mod tests {
         let provider =
             OpenAiTts::with_defaults(None, Some("http://10.1.2.30:8003".into()), None, None);
         assert!(provider.is_configured());
+        assert_eq!(provider.base_url, "http://10.1.2.30:8003");
+    }
+
+    #[test]
+    fn test_with_custom_base_url_trims_trailing_slash() {
+        let provider =
+            OpenAiTts::with_defaults(None, Some("http://10.1.2.30:8003/".into()), None, None);
         assert_eq!(provider.base_url, "http://10.1.2.30:8003");
     }
 
