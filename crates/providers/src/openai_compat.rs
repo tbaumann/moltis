@@ -9,6 +9,7 @@ use {serde::Serialize, tracing::trace};
 
 use moltis_agents::model::{
     ChatMessage, CompletionResponse, StreamEvent, ToolCall, Usage, UserContent,
+    decode_tool_call_arguments,
 };
 
 // ============================================================================
@@ -401,8 +402,7 @@ pub fn parse_tool_calls(message: &serde_json::Value) -> Vec<ToolCall> {
                 .filter_map(|tc| {
                     let id = tc["id"].as_str()?.to_string();
                     let name = tc["function"]["name"].as_str()?.to_string();
-                    let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                    let arguments = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                    let arguments = decode_tool_call_arguments(tc["function"].get("arguments"));
                     Some(ToolCall {
                         id,
                         name,
@@ -1085,8 +1085,7 @@ pub fn parse_responses_completion(resp: &serde_json::Value) -> CompletionRespons
                 "function_call" => {
                     let id = item["call_id"].as_str().unwrap_or("").to_string();
                     let name = item["name"].as_str().unwrap_or("").to_string();
-                    let args_str = item["arguments"].as_str().unwrap_or("{}");
-                    let arguments = serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                    let arguments = decode_tool_call_arguments(item.get("arguments"));
                     tool_calls.push(ToolCall {
                         id,
                         name,
@@ -1359,6 +1358,73 @@ mod tests {
         assert_eq!(calls[0].id, "call_1");
         assert_eq!(calls[0].name, "get_weather");
         assert_eq!(calls[0].arguments["city"], "SF");
+    }
+
+    #[test]
+    fn test_parse_tool_calls_preserves_native_falsy_types() {
+        let msg = serde_json::json!({
+            "tool_calls": [{
+                "id": "call_1",
+                "function": {
+                    "name": "grep",
+                    "arguments": {
+                        "offset": 0,
+                        "multiline": false,
+                        "type": null
+                    }
+                }
+            }]
+        });
+        let calls = parse_tool_calls(&msg);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].arguments["offset"], 0);
+        assert_eq!(calls[0].arguments["multiline"], false);
+        assert!(calls[0].arguments["type"].is_null());
+    }
+
+    #[test]
+    fn test_parse_tool_calls_issue_693_examples() {
+        let msg = serde_json::json!({
+            "tool_calls": [
+                {
+                    "id": "call_exec",
+                    "function": {
+                        "name": "exec",
+                        "arguments": {
+                            "command": "echo hello",
+                            "timeout": 0
+                        }
+                    }
+                },
+                {
+                    "id": "call_edit",
+                    "function": {
+                        "name": "Edit",
+                        "arguments": {
+                            "replace_all": false
+                        }
+                    }
+                },
+                {
+                    "id": "call_grep",
+                    "function": {
+                        "name": "Grep",
+                        "arguments": {
+                            "offset": 0,
+                            "multiline": false,
+                            "type": null
+                        }
+                    }
+                }
+            ]
+        });
+        let calls = parse_tool_calls(&msg);
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].arguments["timeout"], 0);
+        assert_eq!(calls[1].arguments["replace_all"], false);
+        assert_eq!(calls[2].arguments["offset"], 0);
+        assert_eq!(calls[2].arguments["multiline"], false);
+        assert!(calls[2].arguments["type"].is_null());
     }
 
     #[test]
@@ -2649,6 +2715,28 @@ mod tests {
         assert_eq!(result.tool_calls[0].id, "call_abc");
         assert_eq!(result.tool_calls[0].name, "read_file");
         assert_eq!(result.tool_calls[0].arguments["path"], "/tmp/test.txt");
+    }
+
+    #[test]
+    fn test_parse_responses_completion_preserves_native_falsy_types() {
+        let resp = serde_json::json!({
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_abc",
+                "name": "grep",
+                "arguments": {
+                    "offset": 0,
+                    "multiline": false,
+                    "type": null
+                }
+            }],
+            "usage": {"input_tokens": 20, "output_tokens": 10}
+        });
+        let result = parse_responses_completion(&resp);
+        assert_eq!(result.tool_calls.len(), 1);
+        assert_eq!(result.tool_calls[0].arguments["offset"], 0);
+        assert_eq!(result.tool_calls[0].arguments["multiline"], false);
+        assert!(result.tool_calls[0].arguments["type"].is_null());
     }
 
     #[test]
