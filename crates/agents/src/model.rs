@@ -21,6 +21,21 @@ fn document_absolute_path_from_media_ref(media_ref: &str) -> String {
         .to_string()
 }
 
+/// Decode tool-call arguments from provider or persisted JSON.
+///
+/// OpenAI-style APIs typically encode `arguments` as a JSON string, while some
+/// compatible backends return native JSON directly. Preserve the native shape
+/// when it is already structured and only parse when the payload is a string.
+#[must_use]
+pub fn decode_tool_call_arguments(arguments: Option<&serde_json::Value>) -> serde_json::Value {
+    match arguments {
+        Some(serde_json::Value::String(raw)) => serde_json::from_str(raw)
+            .unwrap_or_else(|_| serde_json::Value::Object(Default::default())),
+        Some(serde_json::Value::Null) | None => serde_json::Value::Object(Default::default()),
+        Some(value) => value.clone(),
+    }
+}
+
 // ── Typed chat messages ─────────────────────────────────────────────────────
 
 /// Typed chat message for the LLM provider interface.
@@ -305,9 +320,8 @@ pub fn values_to_chat_messages(values: &[serde_json::Value]) -> Vec<ChatMessage>
                             .filter_map(|tc| {
                                 let id = tc["id"].as_str()?.to_string();
                                 let name = tc["function"]["name"].as_str()?.to_string();
-                                let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
                                 let arguments =
-                                    serde_json::from_str(args_str).unwrap_or(serde_json::json!({}));
+                                    decode_tool_call_arguments(tc["function"].get("arguments"));
                                 Some(ToolCall {
                                     id,
                                     name,
@@ -602,6 +616,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn decode_tool_call_arguments_parses_json_string() {
+        let arguments = serde_json::json!("{\"cmd\":\"ls\"}");
+
+        let decoded = decode_tool_call_arguments(Some(&arguments));
+
+        assert_eq!(decoded, serde_json::json!({"cmd": "ls"}));
+    }
+
+    #[test]
+    fn decode_tool_call_arguments_preserves_native_json() {
+        let arguments = serde_json::json!({"cmd": "ls"});
+
+        let decoded = decode_tool_call_arguments(Some(&arguments));
+
+        assert_eq!(decoded, arguments);
+    }
+
     // ── to_openai_value ──────────────────────────────────────────────
 
     #[test]
@@ -810,6 +842,37 @@ mod tests {
     }
 
     #[test]
+    fn convert_assistant_with_native_tool_arguments_preserves_falsy_types() {
+        let values = vec![serde_json::json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "grep",
+                    "arguments": {
+                        "offset": 0,
+                        "multiline": false,
+                        "type": null
+                    }
+                }
+            }]
+        })];
+        let msgs = values_to_chat_messages(&values);
+        assert_eq!(msgs.len(), 1);
+        match &msgs[0] {
+            ChatMessage::Assistant { tool_calls, .. } => {
+                assert_eq!(tool_calls.len(), 1);
+                assert_eq!(tool_calls[0].arguments["offset"], 0);
+                assert_eq!(tool_calls[0].arguments["multiline"], false);
+                assert!(tool_calls[0].arguments["type"].is_null());
+            },
+            _ => panic!("expected assistant message"),
+        }
+    }
+
+    #[test]
     fn convert_tool_message() {
         let values = vec![
             serde_json::json!({
@@ -862,6 +925,32 @@ mod tests {
         let values: Vec<serde_json::Value> = original.iter().map(|m| m.to_openai_value()).collect();
         let roundtripped = values_to_chat_messages(&values);
         assert_eq!(roundtripped.len(), 4);
+    }
+
+    #[test]
+    fn roundtrip_to_openai_and_back_preserves_falsy_tool_argument_types() {
+        let original = [ChatMessage::Assistant {
+            content: None,
+            tool_calls: vec![ToolCall {
+                id: "call_1".to_string(),
+                name: "grep".to_string(),
+                arguments: serde_json::json!({
+                    "offset": 0,
+                    "multiline": false,
+                    "type": null
+                }),
+            }],
+        }];
+        let values: Vec<serde_json::Value> = original.iter().map(|m| m.to_openai_value()).collect();
+        let roundtripped = values_to_chat_messages(&values);
+        match &roundtripped[0] {
+            ChatMessage::Assistant { tool_calls, .. } => {
+                assert_eq!(tool_calls[0].arguments["offset"], 0);
+                assert_eq!(tool_calls[0].arguments["multiline"], false);
+                assert!(tool_calls[0].arguments["type"].is_null());
+            },
+            other => panic!("expected Assistant, got {other:?}"),
+        }
     }
 
     /// Verify that user content containing role-like prefixes (e.g. injected

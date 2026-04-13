@@ -640,6 +640,27 @@ Step 2:
     }
 
     #[test]
+    fn parse_xml_function_preserves_falsy_and_null_values() {
+        let text = r#"<tool_call>
+<function=grep>
+<parameter=offset>0</parameter>
+<parameter=multiline>false</parameter>
+<parameter=type>null</parameter>
+</function>
+</tool_call>"#;
+        let (calls, remaining) = parse_tool_calls_from_text(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "grep");
+        assert_eq!(calls[0].arguments["offset"], 0);
+        assert_eq!(calls[0].arguments["multiline"], false);
+        assert!(calls[0].arguments["type"].is_null());
+        assert!(
+            remaining.is_none() || remaining.as_deref() == Some(""),
+            "remaining: {remaining:?}"
+        );
+    }
+
+    #[test]
     fn parse_bare_json() {
         let text = r#"I'll run that command now: {"tool": "exec", "arguments": {"command": "whoami"}} and report back."#;
         let (calls, remaining) = parse_tool_calls_from_text(text);
@@ -656,6 +677,18 @@ Step 2:
         let (calls, _) = parse_tool_calls_from_text(text);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "calc");
+    }
+
+    #[test]
+    fn parse_bare_json_preserves_falsy_and_null_values() {
+        let text =
+            r#"{"tool": "grep", "arguments": {"offset": 0, "multiline": false, "type": null}}"#;
+        let (calls, _) = parse_tool_calls_from_text(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "grep");
+        assert_eq!(calls[0].arguments["offset"], 0);
+        assert_eq!(calls[0].arguments["multiline"], false);
+        assert!(calls[0].arguments["type"].is_null());
     }
 
     #[test]
