@@ -674,13 +674,7 @@ impl AgentTool for CronTool {
     }
 
     fn parameters_schema(&self) -> Value {
-        let duration_like = |description: &str| {
-            json!({
-                "type": ["integer", "string"],
-                "description": description
-            })
-        };
-        let absolute_time_like = |description: &str| {
+        let time_field = |description: &str| {
             json!({
                 "type": ["integer", "string"],
                 "description": description
@@ -704,10 +698,10 @@ impl AgentTool for CronTool {
                             "description": "Schedule object. For one-off jobs use {kind:'at', delay_ms} where delay_ms is milliseconds from now (e.g. 600000 for 10 min) — never compute at_ms yourself. For recurring use {kind:'every', every_ms} or {kind:'cron', expr, tz?}.",
                             "properties": {
                                 "kind": { "type": "string", "enum": ["at", "every", "cron"] },
-                                "delay_ms": duration_like("Milliseconds from now to run the job. Accepts integer milliseconds or a duration string like '10m'. Preferred over at_ms."),
-                                "at_ms": absolute_time_like("Absolute epoch milliseconds or ISO-8601 timestamp. Use delay_ms instead unless you have an exact timestamp."),
-                                "every_ms": duration_like("Recurring interval when kind='every'. Accepts integer milliseconds or a duration string like '15m'."),
-                                "anchor_ms": absolute_time_like("Optional anchor when kind='every'. Accepts epoch milliseconds or ISO-8601 timestamp."),
+                                "delay_ms": time_field("Milliseconds from now to run the job. Accepts integer milliseconds or a duration string like '10m'. Preferred over at_ms."),
+                                "at_ms": time_field("Absolute epoch milliseconds or ISO-8601 timestamp. Use delay_ms instead unless you have an exact timestamp."),
+                                "every_ms": time_field("Recurring interval when kind='every'. Accepts integer milliseconds or a duration string like '15m'."),
+                                "anchor_ms": time_field("Optional anchor when kind='every'. Accepts epoch milliseconds or ISO-8601 timestamp."),
                                 "expr": { "type": "string", "description": "Cron expression used when kind='cron'" },
                                 "tz": { "type": "string", "description": "Optional timezone used when kind='cron'" }
                             },
