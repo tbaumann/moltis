@@ -2,13 +2,17 @@
 
 use std::sync::Arc;
 
-use super::helpers::*;
-use crate::model::{ChatMessage, CompletionResponse, LlmProvider, StreamEvent, ToolCall, Usage};
-use crate::tool_parsing::new_synthetic_tool_call_id;
-use anyhow::Result;
-use async_trait::async_trait;
-use std::pin::Pin;
-use tokio_stream::Stream;
+use {
+    super::helpers::*,
+    crate::{
+        model::{ChatMessage, CompletionResponse, LlmProvider, StreamEvent, ToolCall, Usage},
+        tool_parsing::new_synthetic_tool_call_id,
+    },
+    anyhow::Result,
+    async_trait::async_trait,
+    std::pin::Pin,
+    tokio_stream::Stream,
+};
 
 // ── parse_tool_call_from_text tests (delegates to tool_parsing) ──
 
@@ -639,20 +643,44 @@ async fn test_parallel_tool_execution() {
     let provider = Arc::new(MultiToolProvider {
         call_count: std::sync::atomic::AtomicUsize::new(0),
         tool_calls: vec![
-            ToolCall { id: "c1".into(), name: "tool_a".into(), arguments: serde_json::json!({}) },
-            ToolCall { id: "c2".into(), name: "tool_b".into(), arguments: serde_json::json!({}) },
-            ToolCall { id: "c3".into(), name: "tool_c".into(), arguments: serde_json::json!({}) },
+            ToolCall {
+                id: "c1".into(),
+                name: "tool_a".into(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "c2".into(),
+                name: "tool_b".into(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "c3".into(),
+                name: "tool_c".into(),
+                arguments: serde_json::json!({}),
+            },
         ],
     });
 
     let mut tools = ToolRegistry::new();
-    tools.register(Box::new(SlowTool { tool_name: "tool_a".into(), delay_ms: 0 }));
-    tools.register(Box::new(SlowTool { tool_name: "tool_b".into(), delay_ms: 0 }));
-    tools.register(Box::new(SlowTool { tool_name: "tool_c".into(), delay_ms: 0 }));
+    tools.register(Box::new(SlowTool {
+        tool_name: "tool_a".into(),
+        delay_ms: 0,
+    }));
+    tools.register(Box::new(SlowTool {
+        tool_name: "tool_b".into(),
+        delay_ms: 0,
+    }));
+    tools.register(Box::new(SlowTool {
+        tool_name: "tool_c".into(),
+        delay_ms: 0,
+    }));
 
-    let events: Arc<std::sync::Mutex<Vec<RunnerEvent>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events: Arc<std::sync::Mutex<Vec<RunnerEvent>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let events_clone = Arc::clone(&events);
-    let on_event: OnEvent = Box::new(move |event| { events_clone.lock().unwrap().push(event); });
+    let on_event: OnEvent = Box::new(move |event| {
+        events_clone.lock().unwrap().push(event);
+    });
 
     let uc = UserContent::text("Use all tools");
     let result = run_agent_loop(provider, &tools, "Test bot", &uc, Some(&on_event), None)
@@ -663,11 +691,24 @@ async fn test_parallel_tool_execution() {
     assert_eq!(result.tool_calls_made, 3);
 
     let evts = events.lock().unwrap();
-    let starts: Vec<_> = evts.iter().enumerate().filter(|(_, e)| matches!(e, RunnerEvent::ToolCallStart { .. })).map(|(i, _)| i).collect();
-    let ends: Vec<_> = evts.iter().enumerate().filter(|(_, e)| matches!(e, RunnerEvent::ToolCallEnd { .. })).map(|(i, _)| i).collect();
+    let starts: Vec<_> = evts
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches!(e, RunnerEvent::ToolCallStart { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    let ends: Vec<_> = evts
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches!(e, RunnerEvent::ToolCallEnd { .. }))
+        .map(|(i, _)| i)
+        .collect();
     assert_eq!(starts.len(), 3);
     assert_eq!(ends.len(), 3);
-    assert!(starts.iter().all(|s| ends.iter().all(|e| s < e)), "all starts should precede all ends");
+    assert!(
+        starts.iter().all(|s| ends.iter().all(|e| s < e)),
+        "all starts should precede all ends"
+    );
 }
 
 #[tokio::test]
@@ -675,30 +716,59 @@ async fn test_parallel_tool_one_fails() {
     let provider = Arc::new(MultiToolProvider {
         call_count: std::sync::atomic::AtomicUsize::new(0),
         tool_calls: vec![
-            ToolCall { id: "c1".into(), name: "tool_a".into(), arguments: serde_json::json!({}) },
-            ToolCall { id: "c2".into(), name: "fail_tool".into(), arguments: serde_json::json!({}) },
-            ToolCall { id: "c3".into(), name: "tool_c".into(), arguments: serde_json::json!({}) },
+            ToolCall {
+                id: "c1".into(),
+                name: "tool_a".into(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "c2".into(),
+                name: "fail_tool".into(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "c3".into(),
+                name: "tool_c".into(),
+                arguments: serde_json::json!({}),
+            },
         ],
     });
 
     let mut tools = ToolRegistry::new();
-    tools.register(Box::new(SlowTool { tool_name: "tool_a".into(), delay_ms: 0 }));
+    tools.register(Box::new(SlowTool {
+        tool_name: "tool_a".into(),
+        delay_ms: 0,
+    }));
     tools.register(Box::new(FailTool));
-    tools.register(Box::new(SlowTool { tool_name: "tool_c".into(), delay_ms: 0 }));
+    tools.register(Box::new(SlowTool {
+        tool_name: "tool_c".into(),
+        delay_ms: 0,
+    }));
 
-    let events: Arc<std::sync::Mutex<Vec<RunnerEvent>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events: Arc<std::sync::Mutex<Vec<RunnerEvent>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let events_clone = Arc::clone(&events);
-    let on_event: OnEvent = Box::new(move |event| { events_clone.lock().unwrap().push(event); });
+    let on_event: OnEvent = Box::new(move |event| {
+        events_clone.lock().unwrap().push(event);
+    });
 
     let uc = UserContent::text("Use all tools");
-    let result = run_agent_loop(provider, &tools, "Test bot", &uc, Some(&on_event), None).await.unwrap();
+    let result = run_agent_loop(provider, &tools, "Test bot", &uc, Some(&on_event), None)
+        .await
+        .unwrap();
 
     assert_eq!(result.text, "All done");
     assert_eq!(result.tool_calls_made, 3);
 
     let evts = events.lock().unwrap();
-    let successes = evts.iter().filter(|e| matches!(e, RunnerEvent::ToolCallEnd { success: true, .. })).count();
-    let failures = evts.iter().filter(|e| matches!(e, RunnerEvent::ToolCallEnd { success: false, .. })).count();
+    let successes = evts
+        .iter()
+        .filter(|e| matches!(e, RunnerEvent::ToolCallEnd { success: true, .. }))
+        .count();
+    let failures = evts
+        .iter()
+        .filter(|e| matches!(e, RunnerEvent::ToolCallEnd { success: false, .. }))
+        .count();
     assert_eq!(successes, 2);
     assert_eq!(failures, 1);
 }
@@ -708,25 +778,52 @@ async fn test_parallel_execution_is_concurrent() {
     let provider = Arc::new(MultiToolProvider {
         call_count: std::sync::atomic::AtomicUsize::new(0),
         tool_calls: vec![
-            ToolCall { id: "c1".into(), name: "slow_a".into(), arguments: serde_json::json!({}) },
-            ToolCall { id: "c2".into(), name: "slow_b".into(), arguments: serde_json::json!({}) },
-            ToolCall { id: "c3".into(), name: "slow_c".into(), arguments: serde_json::json!({}) },
+            ToolCall {
+                id: "c1".into(),
+                name: "slow_a".into(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "c2".into(),
+                name: "slow_b".into(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "c3".into(),
+                name: "slow_c".into(),
+                arguments: serde_json::json!({}),
+            },
         ],
     });
 
     let mut tools = ToolRegistry::new();
-    tools.register(Box::new(SlowTool { tool_name: "slow_a".into(), delay_ms: 100 }));
-    tools.register(Box::new(SlowTool { tool_name: "slow_b".into(), delay_ms: 100 }));
-    tools.register(Box::new(SlowTool { tool_name: "slow_c".into(), delay_ms: 100 }));
+    tools.register(Box::new(SlowTool {
+        tool_name: "slow_a".into(),
+        delay_ms: 100,
+    }));
+    tools.register(Box::new(SlowTool {
+        tool_name: "slow_b".into(),
+        delay_ms: 100,
+    }));
+    tools.register(Box::new(SlowTool {
+        tool_name: "slow_c".into(),
+        delay_ms: 100,
+    }));
 
     let start = std::time::Instant::now();
     let uc = UserContent::text("Use all tools");
-    let result = run_agent_loop(provider, &tools, "Test bot", &uc, None, None).await.unwrap();
+    let result = run_agent_loop(provider, &tools, "Test bot", &uc, None, None)
+        .await
+        .unwrap();
     let elapsed = start.elapsed();
 
     assert_eq!(result.text, "All done");
     assert_eq!(result.tool_calls_made, 3);
-    assert!(elapsed < std::time::Duration::from_millis(250), "parallel execution took {:?}, expected < 250ms", elapsed);
+    assert!(
+        elapsed < std::time::Duration::from_millis(250),
+        "parallel execution took {:?}, expected < 250ms",
+        elapsed
+    );
 }
 
 // ── sanitize_tool_result tests ──────────────────────────────────
@@ -824,7 +921,9 @@ fn test_extract_images_jpeg() {
 fn test_extract_images_multiple() {
     let payload1 = "A".repeat(300);
     let payload2 = "B".repeat(300);
-    let input = format!("first data:image/png;base64,{payload1} middle data:image/jpeg;base64,{payload2} end");
+    let input = format!(
+        "first data:image/png;base64,{payload1} middle data:image/jpeg;base64,{payload2} end"
+    );
     let (images, remaining) = extract_images_from_text(&input);
     assert_eq!(images.len(), 2);
     assert_eq!(images[0].media_type, "image/png");
@@ -905,33 +1004,64 @@ fn test_tool_result_to_content_vision_only_image() {
 
 #[tokio::test]
 async fn test_vision_provider_tool_result_sanitized() {
-    let provider = Arc::new(VisionEnabledProvider { call_count: std::sync::atomic::AtomicUsize::new(0) });
+    let provider = Arc::new(VisionEnabledProvider {
+        call_count: std::sync::atomic::AtomicUsize::new(0),
+    });
     let mut tools = ToolRegistry::new();
     tools.register(Box::new(ScreenshotTool));
     let uc = UserContent::text("Take a screenshot");
-    let result = run_agent_loop(provider, &tools, "You are a test bot.", &uc, None, None).await.unwrap();
+    let result = run_agent_loop(provider, &tools, "You are a test bot.", &uc, None, None)
+        .await
+        .unwrap();
     assert_eq!(result.text, "Screenshot processed successfully");
     assert_eq!(result.tool_calls_made, 1);
 }
 
 #[tokio::test]
 async fn test_tool_call_end_event_contains_raw_result() {
-    let provider = Arc::new(VisionEnabledProvider { call_count: std::sync::atomic::AtomicUsize::new(0) });
+    let provider = Arc::new(VisionEnabledProvider {
+        call_count: std::sync::atomic::AtomicUsize::new(0),
+    });
     let mut tools = ToolRegistry::new();
     tools.register(Box::new(ScreenshotTool));
-    let events: Arc<std::sync::Mutex<Vec<RunnerEvent>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let events: Arc<std::sync::Mutex<Vec<RunnerEvent>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
     let events_clone = Arc::clone(&events);
-    let on_event: OnEvent = Box::new(move |event| { events_clone.lock().unwrap().push(event); });
+    let on_event: OnEvent = Box::new(move |event| {
+        events_clone.lock().unwrap().push(event);
+    });
     let uc = UserContent::text("Take a screenshot");
-    let result = run_agent_loop(provider, &tools, "You are a test bot.", &uc, Some(&on_event), None).await.unwrap();
+    let result = run_agent_loop(
+        provider,
+        &tools,
+        "You are a test bot.",
+        &uc,
+        Some(&on_event),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.tool_calls_made, 1);
     let evts = events.lock().unwrap();
-    let tool_end = evts.iter().find(|e| matches!(e, RunnerEvent::ToolCallEnd { success: true, .. }));
-    if let Some(RunnerEvent::ToolCallEnd { success, result: Some(result_json), .. }) = tool_end {
+    let tool_end = evts
+        .iter()
+        .find(|e| matches!(e, RunnerEvent::ToolCallEnd { success: true, .. }));
+    if let Some(RunnerEvent::ToolCallEnd {
+        success,
+        result: Some(result_json),
+        ..
+    }) = tool_end
+    {
         assert!(success);
         let result_str = result_json.to_string();
-        assert!(result_str.contains("screenshot"), "result should contain screenshot field");
-        assert!(result_str.contains("data:image/png;base64,"), "result should contain image data URI");
+        assert!(
+            result_str.contains("screenshot"),
+            "result should contain screenshot field"
+        );
+        assert!(
+            result_str.contains("data:image/png;base64,"),
+            "result should contain image data URI"
+        );
     } else {
         panic!("expected ToolCallEnd event with success and result");
     }
@@ -969,7 +1099,9 @@ fn test_extract_images_with_special_base64_chars() {
 #[test]
 fn test_extract_images_preserves_surrounding_text() {
     let payload = "A".repeat(300);
-    let input = format!("Before the image\n\ndata:image/png;base64,{payload}\n\nAfter the image with special chars: <>&");
+    let input = format!(
+        "Before the image\n\ndata:image/png;base64,{payload}\n\nAfter the image with special chars: <>&"
+    );
     let (images, remaining) = extract_images_from_text(&input);
     assert_eq!(images.len(), 1);
     assert!(remaining.contains("Before the image"));
@@ -1011,14 +1143,19 @@ fn test_tool_result_to_content_truncation() {
     let result = tool_result_to_content(&input, 500, true);
     let arr = result.as_array().unwrap();
     let text = arr[0]["text"].as_str().unwrap();
-    assert!(text.contains("[truncated"), "text should be truncated: {text}");
+    assert!(
+        text.contains("[truncated"),
+        "text should be truncated: {text}"
+    );
     assert_eq!(arr[1]["type"], "image_url");
 }
 
 // ── sanitize_tool_name ────────────────────────────────────────────
 
 #[test]
-fn sanitize_tool_name_clean_input() { assert_eq!(sanitize_tool_name("exec"), "exec"); }
+fn sanitize_tool_name_clean_input() {
+    assert_eq!(sanitize_tool_name("exec"), "exec");
+}
 
 #[test]
 fn sanitize_tool_name_trims_whitespace() {
@@ -1040,9 +1177,23 @@ fn sanitize_tool_name_partial_quotes_unchanged() {
 
 #[test]
 fn sanitize_tool_name_noop_on_real_tool_names() {
-    let real_names = ["exec", "web_search", "web_fetch", "memory_save", "memory_search", "file_read", "file_write", "calc", "mcp-server_tool-name"];
+    let real_names = [
+        "exec",
+        "web_search",
+        "web_fetch",
+        "memory_save",
+        "memory_search",
+        "file_read",
+        "file_write",
+        "calc",
+        "mcp-server_tool-name",
+    ];
     for name in real_names {
-        assert_eq!(sanitize_tool_name(name), name, "sanitize_tool_name must be no-op on valid tool name '{name}'");
+        assert_eq!(
+            sanitize_tool_name(name),
+            name,
+            "sanitize_tool_name must be no-op on valid tool name '{name}'"
+        );
     }
 }
 
@@ -1053,13 +1204,19 @@ fn sanitize_tool_name_empty_string() {
 }
 
 #[test]
-fn sanitize_tool_name_only_quotes() { assert_eq!(sanitize_tool_name("\"\""), ""); }
+fn sanitize_tool_name_only_quotes() {
+    assert_eq!(sanitize_tool_name("\"\""), "");
+}
 
 #[test]
-fn sanitize_tool_name_preserves_internal_quotes() { assert_eq!(sanitize_tool_name("my\"tool"), "my\"tool"); }
+fn sanitize_tool_name_preserves_internal_quotes() {
+    assert_eq!(sanitize_tool_name("my\"tool"), "my\"tool");
+}
 
 #[test]
-fn sanitize_tool_name_single_quotes_not_stripped() { assert_eq!(sanitize_tool_name("'exec'"), "'exec'"); }
+fn sanitize_tool_name_single_quotes_not_stripped() {
+    assert_eq!(sanitize_tool_name("'exec'"), "'exec'");
+}
 
 #[test]
 fn sanitize_tool_name_strips_numeric_suffix() {
@@ -1090,10 +1247,69 @@ fn sanitize_tool_name_preserves_legitimate_underscores() {
 
 #[test]
 fn sanitize_tool_name_preserves_mcp_names() {
-    assert_eq!(sanitize_tool_name("mcp__ai__find-tasks"), "mcp__ai__find-tasks");
-    assert_eq!(sanitize_tool_name("mcp__jmap-mcp-0-1-1__get_emails"), "mcp__jmap-mcp-0-1-1__get_emails");
-    assert_eq!(sanitize_tool_name("mcp-server_tool-name"), "mcp-server_tool-name");
+    assert_eq!(
+        sanitize_tool_name("mcp__ai__find-tasks"),
+        "mcp__ai__find-tasks"
+    );
+    assert_eq!(
+        sanitize_tool_name("mcp__jmap-mcp-0-1-1__get_emails"),
+        "mcp__jmap-mcp-0-1-1__get_emails"
+    );
+    assert_eq!(
+        sanitize_tool_name("mcp-server_tool-name"),
+        "mcp-server_tool-name"
+    );
 }
 
 #[test]
-fn sanitize_tool_name_functions_prefix_alone_yields_empty() { assert_eq!(sanitize_tool_name("functions_"), ""); }
+fn sanitize_tool_name_functions_prefix_alone_yields_empty() {
+    assert_eq!(sanitize_tool_name("functions_"), "");
+}
+
+#[test]
+fn legacy_public_tool_alias_strips_wasm_suffix() {
+    assert_eq!(
+        legacy_public_tool_alias("web_search_wasm"),
+        Some("web_search")
+    );
+    assert_eq!(legacy_public_tool_alias("calc_wasm"), Some("calc"));
+    assert_eq!(legacy_public_tool_alias("web_search"), None);
+}
+
+#[test]
+fn resolve_tool_lookup_prefers_public_alias_when_both_exist() {
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(LargeResultTool {
+        tool_name: "web_search",
+        payload: "public".into(),
+    }));
+    tools.register_wasm(
+        Box::new(LargeResultTool {
+            tool_name: "web_search_wasm",
+            payload: "legacy".into(),
+        }),
+        [0x11; 32],
+    );
+
+    let (tool, resolved_name) = resolve_tool_lookup(&tools, "web_search_wasm");
+    let tool = tool.expect("resolved tool should exist");
+    assert_eq!(resolved_name, "web_search");
+    assert_eq!(tool.name(), "web_search");
+}
+
+#[test]
+fn resolve_tool_lookup_falls_back_to_legacy_name_when_no_public_tool_exists() {
+    let mut tools = ToolRegistry::new();
+    tools.register_wasm(
+        Box::new(LargeResultTool {
+            tool_name: "web_search_wasm",
+            payload: "legacy".into(),
+        }),
+        [0x22; 32],
+    );
+
+    let (tool, resolved_name) = resolve_tool_lookup(&tools, "web_search_wasm");
+    let tool = tool.expect("legacy tool should exist");
+    assert_eq!(resolved_name, "web_search_wasm");
+    assert_eq!(tool.name(), "web_search_wasm");
+}

@@ -1,11 +1,10 @@
+#![allow(dead_code, unused_imports)]
+
 //! Shared mock providers, tools, and test helpers for runner tests.
 
 use {
     super::super::*,
-    crate::{
-        model::{ChatMessage, CompletionResponse, LlmProvider, StreamEvent, ToolCall, Usage},
-        tool_parsing::parse_tool_call_from_text,
-    },
+    crate::model::{ChatMessage, CompletionResponse, LlmProvider, StreamEvent, ToolCall, Usage},
     anyhow::{Result, bail},
     async_trait::async_trait,
     moltis_common::hooks::{HookAction, HookEvent, HookHandler, HookPayload, HookRegistry},
@@ -14,25 +13,21 @@ use {
 };
 
 // Re-export commonly used items for test submodules.
-pub(super) use crate::{
-    model::UserContent,
-    tool_registry::ToolRegistry,
+pub(super) use {
+    super::super::{
+        AgentRunError, AgentRunResult, OnEvent, RunnerEvent, TOOL_RESULT_COMPACTION_PLACEHOLDER,
+        compact_tool_results_newest_first_in_place, explicit_shell_command_from_user_content,
+        is_substantive_answer_text, legacy_public_tool_alias, resolve_tool_lookup,
+        retry::*,
+        run_agent_loop, run_agent_loop_with_context, sanitize_tool_name, sanitize_tool_result,
+        streaming::run_agent_loop_streaming,
+        tool_result::{ExtractedImage, extract_images_from_text},
+        tool_result_to_content,
+    },
+    crate::{model::UserContent, tool_registry::ToolRegistry},
 };
-pub(super) use super::super::{
-    OnEvent, RunnerEvent, AgentRunError, AgentRunResult,
-    run_agent_loop, run_agent_loop_with_context,
-    sanitize_tool_result, tool_result_to_content,
-};
-pub(super) use super::super::streaming::run_agent_loop_streaming;
-pub(super) use super::super::retry::*;
-pub(super) use super::super::{
-    sanitize_tool_name, explicit_shell_command_from_user_content,
-    is_substantive_answer_text, TOOL_RESULT_COMPACTION_PLACEHOLDER,
-    compact_tool_results_newest_first_in_place,
-};
-pub(super) use super::super::tool_result::{extract_images_from_text, ExtractedImage};
 
-pub(super) use parse_tool_call_from_text;
+pub(super) use crate::tool_parsing::parse_tool_call_from_text;
 
 // ── Recording hook ──────────────────────────────────────────────────────
 

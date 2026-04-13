@@ -30,6 +30,7 @@ use super::{
     RunnerEvent, apply_loop_detector_intervention, channel_binding_from_tool_context,
     empty_tool_name_retry_prompt, explicit_shell_command_from_user_content,
     find_empty_tool_name_call, has_named_tool_call, is_substantive_answer_text,
+    resolve_tool_lookup,
     retry::{
         RATE_LIMIT_MAX_RETRIES, is_context_window_error, next_retry_delay_ms,
         resolve_agent_max_iterations,
@@ -618,13 +619,16 @@ pub async fn run_agent_loop_streaming(
                 if *sanitized != tc.name {
                     debug!(original = %tc.name, sanitized = %sanitized, "sanitized mangled tool name");
                 }
-                let tool = tools.get(&sanitized);
+                let (tool, resolved_name) = resolve_tool_lookup(tools, sanitized.as_ref());
+                if resolved_name.as_ref() != sanitized.as_ref() {
+                    debug!(original = %sanitized, resolved = %resolved_name, "resolved legacy tool alias");
+                }
                 let mut args = tc.arguments.clone();
 
                 let hook_registry = hook_registry.clone();
                 let session_key = session_key_for_hooks.clone();
                 let channel_for_hooks = channel_for_hooks.clone();
-                let tc_name = sanitized.to_string();
+                let tc_name = resolved_name.to_string();
 
                 if let Some(ref ctx) = tool_context
                     && let (Some(args_obj), Some(ctx_obj)) = (args.as_object_mut(), ctx.as_object())

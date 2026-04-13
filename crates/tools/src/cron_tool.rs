@@ -674,6 +674,12 @@ impl AgentTool for CronTool {
     }
 
     fn parameters_schema(&self) -> Value {
+        let time_field = |description: &str| {
+            json!({
+                "type": ["integer", "string"],
+                "description": description
+            })
+        };
         json!({
             "type": "object",
             "properties": {
@@ -688,28 +694,31 @@ impl AgentTool for CronTool {
                     "properties": {
                         "name": { "type": "string", "description": "Human-readable job name" },
                         "schedule": {
-                            "type": "object",
+                            "type": ["object", "string", "integer"],
                             "description": "Schedule object. For one-off jobs use {kind:'at', delay_ms} where delay_ms is milliseconds from now (e.g. 600000 for 10 min) — never compute at_ms yourself. For recurring use {kind:'every', every_ms} or {kind:'cron', expr, tz?}.",
                             "properties": {
                                 "kind": { "type": "string", "enum": ["at", "every", "cron"] },
-                                "delay_ms": { "type": "integer", "description": "Milliseconds from now to run the job (server resolves to absolute time). Preferred over at_ms." },
-                                "at_ms": { "type": "integer", "description": "Absolute epoch milliseconds. Use delay_ms instead unless you have an exact timestamp." },
-                                "every_ms": { "type": "integer", "description": "Used when kind='every'" },
-                                "anchor_ms": { "type": "integer", "description": "Optional anchor when kind='every'" },
+                                "delay_ms": time_field("Milliseconds from now to run the job. Accepts integer milliseconds or a duration string like '10m'. Preferred over at_ms."),
+                                "at_ms": time_field("Absolute epoch milliseconds or ISO-8601 timestamp. Use delay_ms instead unless you have an exact timestamp."),
+                                "every_ms": time_field("Recurring interval when kind='every'. Accepts integer milliseconds or a duration string like '15m'."),
+                                "anchor_ms": time_field("Optional anchor when kind='every'. Accepts epoch milliseconds or ISO-8601 timestamp."),
                                 "expr": { "type": "string", "description": "Cron expression used when kind='cron'" },
                                 "tz": { "type": "string", "description": "Optional timezone used when kind='cron'" }
                             },
                             "required": ["kind"]
                         },
                         "payload": {
-                            "type": "object",
+                            "type": ["object", "string"],
                             "description": "What to do. Use {kind:'systemEvent', text} for main-session reminders or {kind:'agentTurn', message, model?, timeout_secs?, deliver?, channel?, to?}. `payload.model` selects the LLM for that job. This tool also accepts a shorthand message string at runtime.",
                             "properties": {
                                 "kind": { "type": "string", "enum": ["systemEvent", "agentTurn"] },
                                 "text": { "type": "string" },
                                 "message": { "type": "string" },
                                 "model": { "type": "string" },
-                                "timeout_secs": { "type": "integer" },
+                                "timeout_secs": {
+                                    "type": ["integer", "string"],
+                                    "description": "Optional timeout in seconds. Accepts an integer number of seconds or a duration string like '2m'."
+                                },
                                 "deliver": { "type": "boolean", "description": "Set to true to deliver the agent output to a channel (e.g. Telegram) after the run. Requires channel and to." },
                                 "channel": { "type": "string", "description": "Channel account identifier for delivery (e.g. the Telegram bot username like 'my_telegram_bot'). Required when deliver=true." },
                                 "to": { "type": "string", "description": "Recipient chat ID for delivery (e.g. '123456789' for Telegram). Required when deliver=true." }

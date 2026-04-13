@@ -6,6 +6,9 @@ mod streaming;
 pub mod tool_result;
 
 #[cfg(test)]
+mod tests;
+
+#[cfg(test)]
 #[allow(dead_code, clippy::all)]
 mod tests_legacy;
 
@@ -194,6 +197,26 @@ fn sanitize_tool_name(name: &str) -> Cow<'_, str> {
     } else {
         Cow::Owned(cleaned.to_string())
     }
+}
+
+fn legacy_public_tool_alias(name: &str) -> Option<&str> {
+    name.strip_suffix("_wasm").filter(|base| !base.is_empty())
+}
+
+fn resolve_tool_lookup<'a>(
+    tools: &crate::tool_registry::ToolRegistry,
+    name: &'a str,
+) -> (
+    Option<std::sync::Arc<dyn crate::tool_registry::AgentTool>>,
+    Cow<'a, str>,
+) {
+    if let Some(alias) = legacy_public_tool_alias(name)
+        && let Some(tool) = tools.get(alias)
+    {
+        return (Some(tool), Cow::Owned(alias.to_string()));
+    }
+
+    (tools.get(name), Cow::Borrowed(name))
 }
 
 /// Detect an explicit shell command in the latest user turn.
