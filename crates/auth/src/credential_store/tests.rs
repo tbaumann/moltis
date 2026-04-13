@@ -32,8 +32,8 @@ fn test_is_loopback() {
 
 #[test]
 fn test_password_hash_verify() {
-    let password = fixture_secret("password-hash-verify");
-    let wrong_password = fixture_secret("password-hash-verify-wrong");
+    let password = generate_token();
+    let wrong_password = generate_token();
     let hash = hash_password(&password).unwrap();
     assert!(verify_password(&password, &hash));
     assert!(!verify_password(&wrong_password, &hash));
