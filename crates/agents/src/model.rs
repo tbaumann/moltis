@@ -32,8 +32,6 @@ pub fn decode_tool_call_arguments(arguments: Option<&serde_json::Value>) -> serd
         Some(serde_json::Value::String(raw)) => serde_json::from_str(raw)
             .unwrap_or_else(|_| serde_json::Value::Object(Default::default())),
         Some(serde_json::Value::Null) | None => serde_json::Value::Object(Default::default()),
-        Some(serde_json::Value::String(raw)) => serde_json::from_str(raw)
-            .unwrap_or_else(|_| serde_json::Value::Object(Default::default())),
         Some(value) => value.clone(),
     }
 }
@@ -616,6 +614,24 @@ mod tests {
         assert!(
             matches!(msg, ChatMessage::Tool { tool_call_id, content } if tool_call_id == "call_1" && content == "result")
         );
+    }
+
+    #[test]
+    fn decode_tool_call_arguments_parses_json_string() {
+        let arguments = serde_json::json!("{\"cmd\":\"ls\"}");
+
+        let decoded = decode_tool_call_arguments(Some(&arguments));
+
+        assert_eq!(decoded, serde_json::json!({"cmd": "ls"}));
+    }
+
+    #[test]
+    fn decode_tool_call_arguments_preserves_native_json() {
+        let arguments = serde_json::json!({"cmd": "ls"});
+
+        let decoded = decode_tool_call_arguments(Some(&arguments));
+
+        assert_eq!(decoded, arguments);
     }
 
     // ── to_openai_value ──────────────────────────────────────────────
