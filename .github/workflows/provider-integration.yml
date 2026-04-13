@@ -249,6 +249,81 @@ jobs:
       - name: Run provider E2E scenarios
         run: ./scripts/run-provider-e2e-daily.sh
 
+  openai-live-e2e:
+    name: OpenAI Live E2E
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    continue-on-error: true
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Check OpenAI secret
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::warning::OPENAI_API_KEY is not configured, skipping live OpenAI E2E"
+            echo "SKIP=true" >> "$GITHUB_ENV"
+          fi
+
+      - uses: dtolnay/rust-toolchain@f7ccc83f9ed1e5b9c81d8a67d7ad1a747e22a561 # master
+        if: env.SKIP != 'true'
+        with:
+          toolchain: stable
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: env.SKIP != 'true'
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        if: env.SKIP != 'true'
+        with:
+          shared-key: openai-live-e2e-v1
+          cache-all-crates: true
+
+      - name: Install npm dependencies
+        if: env.SKIP != 'true'
+        working-directory: crates/web/ui
+        run: npm ci
+
+      - name: Build Tailwind CSS
+        if: env.SKIP != 'true'
+        run: |
+          ./scripts/download-tailwindcss-cli.sh tailwindcss-linux-x64
+          cd crates/web/ui && TAILWINDCSS=../../../tailwindcss-linux-x64 ./build.sh
+
+      - name: Build moltis binary
+        if: env.SKIP != 'true'
+        run: cargo build --bin moltis
+
+      - name: Install Playwright browsers
+        if: env.SKIP != 'true'
+        working-directory: crates/web/ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Run live OpenAI E2E
+        if: env.SKIP != 'true'
+        working-directory: crates/web/ui
+        env:
+          CI: "true"
+        run: npx playwright test --project=openai-live e2e/specs/openai-live.spec.js
+
+      - name: Upload OpenAI live E2E results
+        if: ${{ !cancelled() && env.SKIP != 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: openai-live-e2e-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            crates/web/ui/playwright-report/
+            crates/web/ui/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   summary:
     name: Integration Summary
     runs-on: ubuntu-latest
@@ -257,6 +332,7 @@ jobs:
     needs:
       - provider-tests
       - provider-e2e-scenarios
+      - openai-live-e2e
     if: always()
     steps:
       - name: Report

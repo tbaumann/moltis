@@ -1303,6 +1303,8 @@ mod tests {
                     },
                     "minContains": 1,
                     "maxContains": 2,
+                    "minProperties": 1,
+                    "maxProperties": 4,
                     "const": "active",
                     "x-custom": "remove-me",
                     "items": {
@@ -1330,6 +1332,8 @@ mod tests {
             "\"contains\"",
             "\"minContains\"",
             "\"maxContains\"",
+            "\"minProperties\"",
+            "\"maxProperties\"",
             "\"not\"",
             "\"x-custom\"",
         ] {

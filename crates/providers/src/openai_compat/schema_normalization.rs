@@ -40,8 +40,6 @@ const OPENAI_ALLOWED_SCHEMA_KEYWORDS: &[&str] = &[
     "minItems",
     "maxItems",
     "uniqueItems",
-    "minProperties",
-    "maxProperties",
 ];
 
 #[derive(Debug, Clone, Default)]

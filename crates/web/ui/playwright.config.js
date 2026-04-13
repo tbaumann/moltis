@@ -42,6 +42,8 @@ const oauthBaseURL = `http://127.0.0.1:${oauthPort}`;
 const onboardingAnthropicPort = resolvePort("MOLTIS_E2E_ONBOARDING_ANTHROPIC_PORT", usedPorts);
 const onboardingAnthropicBaseURL =
 	process.env.MOLTIS_E2E_ONBOARDING_ANTHROPIC_BASE_URL || `http://127.0.0.1:${onboardingAnthropicPort}`;
+const openaiLivePort = resolvePort("MOLTIS_E2E_OPENAI_LIVE_PORT", usedPorts);
+const openaiLiveBaseURL = process.env.MOLTIS_E2E_OPENAI_LIVE_BASE_URL || `http://127.0.0.1:${openaiLivePort}`;
 // Reliability first: fresh local gateway instances by default avoid
 // hidden cross-run state leaks. Set MOLTIS_E2E_REUSE_SERVER=1 to trade
 // determinism for faster startup in ad-hoc local runs.
@@ -73,6 +75,7 @@ module.exports = defineConfig({
 				/onboarding-openai\.spec/,
 				/onboarding-auth\.spec/,
 				/onboarding-anthropic\.spec/,
+				/openai-live\.spec/,
 				/oauth\.spec/,
 			],
 		},
@@ -107,6 +110,13 @@ module.exports = defineConfig({
 			testMatch: /onboarding-anthropic\.spec/,
 			use: {
 				baseURL: onboardingAnthropicBaseURL,
+			},
+		},
+		{
+			name: "openai-live",
+			testMatch: /openai-live\.spec/,
+			use: {
+				baseURL: openaiLiveBaseURL,
 			},
 		},
 	],
@@ -164,6 +174,17 @@ module.exports = defineConfig({
 			env: {
 				...process.env,
 				MOLTIS_E2E_ONBOARDING_ANTHROPIC_PORT: onboardingAnthropicPort,
+			},
+		},
+		{
+			command: "./e2e/start-gateway-openai-live.sh",
+			cwd: __dirname,
+			url: `${openaiLiveBaseURL}/health`,
+			reuseExistingServer: reuseExistingServer,
+			timeout: 300_000,
+			env: {
+				...process.env,
+				MOLTIS_E2E_OPENAI_LIVE_PORT: openaiLivePort,
 			},
 		},
 	],
