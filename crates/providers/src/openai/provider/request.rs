@@ -84,8 +84,8 @@ impl OpenAiProvider {
     ///
     /// The `strict_tools` config field overrides auto-detection when set.
     /// When unset, providers whose backends reject array-form types default to
-    /// non-strict: OpenRouter (proxies to Google, Anthropic, Meta, etc.) and
-    /// Gemini direct.
+    /// non-strict: OpenRouter (proxies to Google, Anthropic, Meta, etc.),
+    /// Gemini direct, and Vertex AI (`googleapis.com`).
     pub(super) fn needs_strict_tools(&self) -> bool {
         if let Some(explicit) = self.strict_tools_override {
             return explicit;
@@ -93,7 +93,9 @@ impl OpenAiProvider {
         if self.base_url.contains("openrouter.ai") {
             return false;
         }
-        if self.provider_name.eq_ignore_ascii_case("gemini") {
+        if self.provider_name.eq_ignore_ascii_case("gemini")
+            || self.base_url.contains("googleapis.com")
+        {
             return false;
         }
         true
