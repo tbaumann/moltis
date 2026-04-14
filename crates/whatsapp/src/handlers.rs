@@ -87,12 +87,17 @@ pub async fn handle_event(
             }
             mirror_latest_qr(&accounts, &state.account_id, None);
 
-            // Auto-approve the owner's phone number so they don't need
-            // to manually add themselves to the allowlist.
-            if let Some(own_pn) = state.client.get_pn().await {
-                let pn_user = own_pn.user.clone();
-                let pn_jid = own_pn.to_string();
-                auto_approve_owner(&accounts, &state.account_id, &pn_user, &pn_jid);
+            // Auto-approve the owner's phone and LID JIDs so they don't
+            // need to manually add themselves to the allowlist.
+            {
+                let own_pn = state.client.get_pn().await;
+                let own_lid = state.client.get_lid().await;
+                auto_approve_owner_jids(
+                    &accounts,
+                    &state.account_id,
+                    own_pn.as_ref(),
+                    own_lid.as_ref(),
+                );
             }
 
             let display_name = state.client.get_push_name().await;
@@ -219,6 +224,18 @@ async fn handle_message(
     let own_lid = state.client.get_lid().await;
     let is_self_chat = is_owner_user(chat_jid, own_pn.as_ref(), own_lid.as_ref());
     let sender_is_owner = is_owner_user(sender_jid, own_pn.as_ref(), own_lid.as_ref());
+
+    debug!(
+        account_id = %state.account_id,
+        sender = %sender_jid,
+        chat = %chat_jid,
+        own_pn = ?own_pn.as_ref().map(|j| j.to_string()),
+        own_lid = ?own_lid.as_ref().map(|j| j.to_string()),
+        is_from_me = info.source.is_from_me,
+        is_self_chat,
+        sender_is_owner,
+        "inbound message owner detection"
+    );
 
     if info.source.is_from_me || (is_self_chat && sender_is_owner) {
         // Check text for bot watermark as secondary loop detection.
@@ -838,25 +855,35 @@ fn message_mentions_owner(msg: &wa::Message, own_pn: Option<&Jid>, own_lid: Opti
     )
 }
 
-/// Auto-add the owner's phone number to the allowlist so they're always
-/// approved without needing manual configuration or OTP.
-fn auto_approve_owner(accounts: &AccountStateMap, account_id: &str, pn_user: &str, pn_jid: &str) {
+/// Auto-add the owner's phone and LID JIDs to the allowlist so they're
+/// always approved without manual configuration or OTP.
+fn auto_approve_owner_jids(
+    accounts: &AccountStateMap,
+    account_id: &str,
+    own_pn: Option<&Jid>,
+    own_lid: Option<&Jid>,
+) {
     let mut map = accounts.write().unwrap_or_else(|e| e.into_inner());
     let Some(state) = map.get_mut(account_id) else {
         return;
     };
-    let already = state
-        .config
-        .allowlist
-        .iter()
-        .any(|entry| entry == pn_user || entry == pn_jid);
-    if !already {
-        info!(
-            account_id,
-            phone = pn_user,
-            "auto-adding owner phone number to allowlist"
-        );
-        state.config.allowlist.push(pn_jid.to_string());
+
+    for jid in own_pn.into_iter().chain(own_lid.into_iter()) {
+        let jid_str = jid.to_string();
+        let user = &jid.user;
+        let already = state
+            .config
+            .allowlist
+            .iter()
+            .any(|entry| entry == user || entry == &jid_str);
+        if !already {
+            info!(
+                account_id,
+                jid = %jid_str,
+                "auto-adding owner JID to allowlist"
+            );
+            state.config.allowlist.push(jid_str);
+        }
     }
 }
 
