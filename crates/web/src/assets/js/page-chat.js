@@ -1478,7 +1478,6 @@ function bindSessionControlsVisibility() {
 	});
 }
 
-
 function bindChatMoreModal(debugModal, fullContextModal, closeDebugModal, closeFullContextModal) {
 	var chatMoreModal = S.$("chatMoreModal");
 	var chatMoreBtn = S.$("chatMoreBtn");
