@@ -609,6 +609,85 @@ test.describe("Onboarding wizard", () => {
 		expect(pageErrors).toEqual([]);
 	});
 
+	test("whatsapp pairing falls back to polling channels.status for QR", async ({ page }) => {
+		const pageErrors = watchPageErrors(page);
+		await page.goto("/onboarding");
+		await page.waitForLoadState("networkidle");
+
+		const reachedChannel = await moveToChannelStep(page);
+		if (!reachedChannel) {
+			test.skip(true, "could not reach channel step in this onboarding flow");
+			return;
+		}
+
+		const whatsappSelectBtn = page.getByRole("button", { name: "WhatsApp", exact: true });
+		if (await isVisible(whatsappSelectBtn)) {
+			await whatsappSelectBtn.click();
+		}
+
+		const accountInput = page.getByPlaceholder("e.g. my-whatsapp");
+		if (!(await isVisible(accountInput))) {
+			test.skip(true, "WhatsApp onboarding option is not available in this run");
+			return;
+		}
+
+		const accountId = "e2e-wa-poll";
+
+		// Mock WebSocket: channels.add succeeds, channels.status returns QR data
+		// (simulating the polling fallback path — no channel event is emitted).
+		await page.evaluate(
+			async ({ accountIdArg }) => {
+				const onboardingScript = document.querySelector('script[type="module"][src*="js/onboarding-app.js"]');
+				if (!onboardingScript) throw new Error("onboarding-app.js script not found");
+				const appUrl = new URL(onboardingScript.src, window.location.origin).href;
+				const marker = "js/onboarding-app.js";
+				const prefix = appUrl.slice(0, appUrl.indexOf(marker));
+				const state = await import(`${prefix}js/state.js`);
+				const wsOpen = typeof WebSocket !== "undefined" ? WebSocket.OPEN : 1;
+				state.setConnected(true);
+				state.setWs({
+					readyState: wsOpen,
+					send(raw) {
+						const req = JSON.parse(raw || "{}");
+						const resolver = state.pending[req.id];
+						if (!resolver) return;
+						if (req.method === "channels.add") {
+							resolver({ ok: true, payload: {} });
+						} else if (req.method === "channels.status") {
+							// Return QR data in the extra field, simulating the polling path.
+							resolver({
+								ok: true,
+								payload: {
+									channels: [
+										{
+											type: "whatsapp",
+											account_id: accountIdArg,
+											status: "disconnected",
+											extra: { qr_data: "2@polled_qr_payload" },
+										},
+									],
+								},
+							});
+						} else {
+							resolver({ ok: false, error: { message: `unexpected rpc: ${req.method}` } });
+						}
+						delete state.pending[req.id];
+					},
+				});
+			},
+			{ accountIdArg: accountId },
+		);
+
+		await accountInput.fill(accountId);
+		await page.getByRole("button", { name: "Start Pairing", exact: true }).click();
+
+		// The polling fallback runs every 2s. Wait for QR data to appear.
+		// It should render as raw text since no SVG was provided via polling.
+		const qrFallback = page.getByText("2@polled_qr_payload");
+		await expect(qrFallback).toBeVisible({ timeout: 10_000 });
+		expect(pageErrors).toEqual([]);
+	});
+
 	test("matrix onboarding renders a real mask icon", async ({ page }) => {
 		const pageErrors = watchPageErrors(page);
 		await page.goto("/onboarding");

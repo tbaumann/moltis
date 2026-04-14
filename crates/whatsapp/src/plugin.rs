@@ -155,6 +155,16 @@ impl ChannelPlugin for WhatsAppPlugin {
         account_id: &str,
         config: serde_json::Value,
     ) -> ChannelResult<()> {
+        // If the account is already running (e.g. started from stored channels
+        // on boot), skip re-starting to avoid sled lock conflicts.
+        if self.has_account(account_id) {
+            info!(
+                account_id,
+                "WhatsApp account already running, skipping start"
+            );
+            return Ok(());
+        }
+
         let wa_config: WhatsAppAccountConfig = serde_json::from_value(config)?;
 
         info!(account_id, "starting WhatsApp account");
@@ -396,5 +406,11 @@ mod tests {
         // Threads: WhatsApp does NOT implement ChannelThreadContext
         assert!(!desc.capabilities.supports_threads);
         assert!(plugin.thread_context().is_none());
+    }
+
+    #[test]
+    fn has_account_returns_false_when_empty() {
+        let plugin = WhatsAppPlugin::new(PathBuf::from("/tmp/test"));
+        assert!(!plugin.has_account("main"));
     }
 }
