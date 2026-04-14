@@ -3334,6 +3334,7 @@ function WhatsAppForm({ onConnected, error, setError }) {
 	var [qrSvgUrl, setQrSvgUrl] = useState(null);
 	var [pairingError, setPairingError] = useState(null);
 	var unsubRef = useRef(null);
+	var hadQrRef = useRef(false);
 
 	// Clean up event subscription on unmount.
 	useEffect(() => {
@@ -3346,7 +3347,7 @@ function WhatsAppForm({ onConnected, error, setError }) {
 	// connection detection (WebSocket events may be missed).
 	useEffect(() => {
 		if (!pairingStarted) return undefined;
-		var id = accountId.trim();
+		var id = accountId.trim() || "main";
 		var timer = setInterval(async () => {
 			try {
 				var res = await sendRpc("channels.status");
@@ -3360,11 +3361,12 @@ function WhatsAppForm({ onConnected, error, setError }) {
 					return;
 				}
 				// QR cleared + not connected = pairing succeeded, connecting.
-				if (qrData && !ch.extra?.qr_data) {
+				if (hadQrRef.current && !ch.extra?.qr_data) {
 					onConnected(id, "whatsapp");
 					return;
 				}
-				if (ch.extra?.qr_data && !qrData) {
+				if (ch.extra?.qr_data) {
+					hadQrRef.current = true;
 					setQrData(ch.extra.qr_data);
 					if (ch.extra.qr_svg) setQrSvg(ch.extra.qr_svg);
 				}
@@ -3373,7 +3375,7 @@ function WhatsAppForm({ onConnected, error, setError }) {
 			}
 		}, 2000);
 		return () => clearInterval(timer);
-	}, [pairingStarted, qrData]);
+	}, [pairingStarted]);
 
 	useEffect(() => {
 		if (!qrSvg) {

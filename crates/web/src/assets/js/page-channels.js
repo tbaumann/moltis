@@ -1801,7 +1801,7 @@ function AddWhatsAppModal() {
 							loadChannels();
 							return;
 						}
-						if (ch.extra?.qr_data && !waQrData.value) {
+						if (ch.extra?.qr_data) {
 							waQrData.value = ch.extra.qr_data;
 							if (ch.extra.qr_svg) waQrSvg.value = ch.extra.qr_svg;
 						}
