@@ -270,12 +270,13 @@ async fn handle_message(
     }
 
     // For self-chat, the chat JID is the LID which doesn't work as a reply
-    // target and shows an opaque ID in the UI. Use the PN JID instead so
-    // outbound messages are delivered and the phone number is displayed.
+    // target and shows an opaque ID in the UI.  Use just the phone number
+    // as the chat_id — it's human-readable, URL-safe (no dots), and the
+    // outbound layer resolves it to a full PN JID before sending.
     let chat_id = if is_owner_self_chat {
         if let Some(ref pn) = own_pn {
             username = pn.user.clone();
-            format!("{}@{}", pn.user, pn.server)
+            pn.user.clone()
         } else {
             chat_id
         }
