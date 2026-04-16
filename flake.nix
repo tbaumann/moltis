@@ -28,7 +28,7 @@
         wasmCraneLib = (crane.mkLib pkgs).overrideToolchain (
           p:
             p.rust-bin.nightly.${nightly}.default.override {
-              targets = ["wasm32-wasip2" "x86_64-unknown-linux-gnu"];
+              targets = ["wasm32-wasip2"];
             }
         );
 
