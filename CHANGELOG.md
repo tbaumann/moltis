@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [20260420.01] - 2026-04-20
+### Fixed
+- [ci] Handle .ts locale files in i18n-check on Node <22
+
 ## [20260419.01] - 2026-04-19
 ### Added
 - [code-index] Add code indexing crate with builtin SQLite+FTS5 backend (#771)
