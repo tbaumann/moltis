@@ -110,6 +110,9 @@
             rustPlatform.bindgenHook
             pkgs.rust-bin.nightly.${nightly}.default
             rust-analyzer
+            cmake
+            perl
+            pkg-config
           ];
         };
       }
