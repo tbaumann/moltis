@@ -37,19 +37,23 @@ lint: lockfile-check
 build-css:
     cd crates/web/ui && ./build.sh
 
-# Ad-hoc codesign debug binary (macOS only, requires MACOS_CODESIGN_IDENTITY).
-# Prevents Little Snitch from prompting on every rebuild during local dev.
+# Ad-hoc codesign debug binaries (macOS only, requires MACOS_CODESIGN_IDENTITY).
+# Signs the main binary and all test binaries in target/debug/deps/ so Little
+# Snitch doesn't prompt on every rebuild during local dev.
 [private]
 codesign-debug:
     #!/usr/bin/env bash
     set -euo pipefail
     [ "$(uname -s)" = "Darwin" ] || exit 0
     [ -n "${MACOS_CODESIGN_IDENTITY:-}" ] || exit 0
-    bin="target/debug/moltis"
-    [ -f "$bin" ] || exit 0
-    codesign --force --sign "$MACOS_CODESIGN_IDENTITY" \
-        --identifier "${MACOS_CODESIGN_IDENTIFIER:-org.moltis.dev}" \
-        "$bin" 2>/dev/null || true
+    id="${MACOS_CODESIGN_IDENTIFIER:-org.moltis.dev}"
+    sign() { codesign --force --sign "$MACOS_CODESIGN_IDENTITY" --identifier "$id" "$1" 2>/dev/null || true; }
+    # Main binary
+    [ -f target/debug/moltis ] && sign target/debug/moltis
+    # Test binaries (Mach-O executables, skip .d/.fingerprint/dylib)
+    for bin in target/debug/deps/moltis*; do
+        [ -f "$bin" ] && [ -x "$bin" ] && [[ "$bin" != *.d ]] && sign "$bin"
+    done
 
 # Build the project
 build: build-css
@@ -331,10 +335,13 @@ ship commit_message='' pr_title='' pr_body='':
 # Run all tests (nightly to share build cache with clippy/lint, OS-aware).
 # On macOS: single nextest run using default features (includes Metal, not CUDA).
 # On Linux: --all-features (includes CUDA).
+# Builds first so codesign can run before test execution (prevents Little Snitch prompts).
 test:
     #!/usr/bin/env bash
     set -euo pipefail
     if [ "$(uname -s)" = "Darwin" ]; then
+        cargo +{{nightly_toolchain}} build --workspace --all-targets
+        just codesign-debug
         cargo +{{nightly_toolchain}} nextest run --workspace
     else
         cargo +{{nightly_toolchain}} nextest run --workspace --all-features
