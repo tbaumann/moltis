@@ -162,7 +162,7 @@ impl From<&moltis_config::CodeIndexTomlConfig> for CodeIndexConfig {
                 paths.extend(toml.skip_paths.iter().cloned());
                 paths
             },
-            data_dir: toml.data_dir.as_ref().map(|s| PathBuf::from(s)),
+            data_dir: toml.data_dir.as_ref().map(PathBuf::from),
         }
     }
 }
