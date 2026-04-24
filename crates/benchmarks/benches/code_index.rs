@@ -70,7 +70,7 @@ fn search_fixture() -> &'static SearchFixture {
                     .unwrap();
 
             // Chunk and index each file
-            let chunker = moltis_code_index::chunker::CodeChunker::new(config.chunker());
+            let chunker_config = config.chunker();
             let mut file_count = 0usize;
             let mut chunk_count = 0usize;
 
@@ -78,7 +78,14 @@ fn search_fixture() -> &'static SearchFixture {
                 let content = tokio::fs::read_to_string(&file.path)
                     .await
                     .unwrap_or_default();
-                let chunks = chunker.chunk(&content, &file.relative_path.display().to_string());
+                let rel = file.relative_path.display().to_string();
+                let ext = file
+                    .relative_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default();
+                let chunks =
+                    moltis_code_index::chunker::chunk(&content, &rel, ext, &chunker_config);
 
                 if !chunks.is_empty() {
                     store
