@@ -613,7 +613,8 @@ pub(super) fn check_semantic_warnings(config: &MoltisConfig, diagnostics: &mut V
             });
         }
         if let Some(ref url) = instance.url
-            && !url.starts_with("http://") && !url.starts_with("https://")
+            && !url.starts_with("http://")
+            && !url.starts_with("https://")
         {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
