@@ -58,8 +58,8 @@ test.describe("Signal channel", () => {
 		await expect(groupPolicySelect).toBeVisible();
 		await expect(groupPolicySelect).toHaveValue("disabled");
 
-		await expect(page.getByText("How to set up Signal")).toBeVisible();
-		await expect(page.getByText("Run signal-cli daemon with JSON-RPC HTTP enabled")).toBeVisible();
+		await expect(page.getByText("Requires signal-cli")).toBeVisible();
+		await expect(page.getByText("signal-cli daemon --http localhost:8080")).toBeVisible();
 
 		expect(pageErrors).toEqual([]);
 	});
