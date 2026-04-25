@@ -490,6 +490,7 @@ port = {port}                           # Port number (auto-generated for this i
 # ack_max_chars = 300               # Max characters for acknowledgment reply
 # deliver = false                   # Deliver heartbeat replies to a channel
 # sandbox_enabled = true            # Run heartbeat commands in sandbox
+# wake_cooldown = "5m"              # Min duration between exec-triggered heartbeat wakes (0 to disable)
 
 # [heartbeat.active_hours]
 # start = "08:00"

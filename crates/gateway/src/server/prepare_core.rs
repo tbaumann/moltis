@@ -817,6 +817,20 @@ pub async fn prepare_gateway_core(
         window_ms: config.cron.rate_limit_window_secs * 1000,
     };
 
+    let default_cooldown_ms = moltis_cron::service::DEFAULT_WAKE_COOLDOWN_MS;
+    let wake_cooldown_ms = match moltis_cron::parse::parse_duration_ms(&config.heartbeat.wake_cooldown) {
+        Ok(ms) => ms,
+        Err(e) => {
+            tracing::warn!(
+                raw = %config.heartbeat.wake_cooldown,
+                error = %e,
+                fallback_ms = default_cooldown_ms,
+                "invalid [heartbeat].wake_cooldown, using default"
+            );
+            default_cooldown_ms
+        }
+    };
+
     let cron_store_for_pruning = Arc::clone(&cron_store);
     let cron_service = moltis_cron::service::CronService::with_events_queue(
         cron_store,
@@ -824,6 +838,7 @@ pub async fn prepare_gateway_core(
         on_agent_turn,
         Some(on_cron_notify),
         rate_limit_config,
+        wake_cooldown_ms,
         events_queue,
     );
 
