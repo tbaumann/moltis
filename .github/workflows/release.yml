@@ -987,11 +987,24 @@ jobs:
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          xcrun notarytool submit "moltis-${VERSION}-macos.app.zip" \
+          xcrun notarytool store-credentials "notarytool-profile" \
             --apple-id "$APPLE_ID" \
-            --password "$APPLE_ID_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
-            --wait
+            --password "$APPLE_ID_PASSWORD"
+
+          SUBMIT_OUT="$(xcrun notarytool submit "moltis-${VERSION}-macos.app.zip" \
+            --keychain-profile "notarytool-profile" \
+            --wait 2>&1)" || true
+          echo "$SUBMIT_OUT"
+
+          SUBMISSION_ID="$(echo "$SUBMIT_OUT" | grep '  id:' | head -1 | awk '{print $2}')"
+
+          if echo "$SUBMIT_OUT" | grep -q 'status: Invalid'; then
+            echo "::error::Notarization failed. Fetching log..."
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --keychain-profile "notarytool-profile" || true
+            exit 1
+          fi
 
           # Staple the notarization ticket to the app bundle
           APP_PATH="apps/macos/.derivedData-ci/Build/Products/Release/Moltis.app"
