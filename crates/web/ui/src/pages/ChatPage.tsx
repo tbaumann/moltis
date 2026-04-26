@@ -655,7 +655,6 @@ function mountSessionHeaderControls(): void {
 	}
 }
 
-
 function bindChatComposer(): void {
 	const chatInput = S.chatInput as HTMLTextAreaElement;
 	chatInput.addEventListener("input", () => {

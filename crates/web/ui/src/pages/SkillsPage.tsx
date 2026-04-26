@@ -174,10 +174,7 @@ function doInstall(source: string): Promise<void> {
 		if (res?.ok) {
 			const p = (res.payload || {}) as Record<string, unknown[]>;
 			const installed = (p.installed || []) as Array<{ name?: string }>;
-			showToast(
-				`Installed ${source} (${installed.length} skills) — review and enable the skills you need.`,
-				"success",
-			);
+			showToast(`Installed ${source} (${installed.length} skills) — review and enable the skills you need.`, "success");
 			fetchAll();
 			stopInstallProgress(pid, true);
 		} else {
