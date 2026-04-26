@@ -314,10 +314,10 @@ impl KeyStore {
         if path.exists() && enc_path.exists() {
             let json_mod = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
             let enc_mod = std::fs::metadata(&enc_path).and_then(|m| m.modified()).ok();
-            if let (Some(j), Some(e)) = (json_mod, enc_mod) {
-                if j > e {
-                    return Self::load_all_configs_from_path(&path);
-                }
+            if let (Some(j), Some(e)) = (json_mod, enc_mod)
+                && j > e
+            {
+                return Self::load_all_configs_from_path(&path);
             }
         }
 
