@@ -956,7 +956,7 @@ jobs:
           if [[ "$RELEASE_DRY_RUN" == "true" ]]; then
             EXTRA_FLAGS=(CODE_SIGNING_ALLOWED=NO)
           else
-            EXTRA_FLAGS=(CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" OTHER_CODE_SIGN_FLAGS="--options runtime")
+            EXTRA_FLAGS=(CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Developer ID Application" DEVELOPMENT_TEAM="${APPLE_TEAM_ID}" OTHER_CODE_SIGN_FLAGS="--timestamp --options runtime")
           fi
 
           xcodebuild \
@@ -967,6 +967,16 @@ jobs:
             -derivedDataPath "$DERIVED_DATA_DIR" \
             "${EXTRA_FLAGS[@]}" \
             build
+
+          # Re-sign with hardened runtime + timestamp + clean entitlements
+          # to strip com.apple.security.get-task-allow (debug entitlement)
+          if [[ "$RELEASE_DRY_RUN" != "true" ]]; then
+            APP_PATH="${DERIVED_DATA_DIR}/Build/Products/Release/Moltis.app"
+            /usr/bin/codesign --force --deep --timestamp --options runtime \
+              --entitlements apps/macos/Moltis.entitlements \
+              --sign "Developer ID Application" \
+              "$APP_PATH"
+          fi
 
       - name: Package macOS app
         env:
