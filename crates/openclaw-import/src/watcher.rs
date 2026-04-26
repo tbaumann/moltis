@@ -117,8 +117,8 @@ mod tests {
         let mut debouncer = new_debouncer_opt::<_, PollWatcher, RecommendedCache>(
             debounce,
             None,
-            move |result: DebounceEventResult| match result {
-                Ok(events) => {
+            move |result: DebounceEventResult| {
+                if let Ok(events) = result {
                     let changed = events.iter().any(|event| {
                         use notify_debouncer_full::notify::EventKind;
                         matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
@@ -130,8 +130,7 @@ mod tests {
                     if changed {
                         let _ = tx.send(ImportWatchEvent::SessionChanged);
                     }
-                },
-                Err(_) => {},
+                }
             },
             RecommendedCache::default(),
             config,
