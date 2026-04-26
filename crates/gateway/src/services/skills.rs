@@ -1271,10 +1271,13 @@ fn skill_detail_bundled(skill_name: &str) -> ServiceResult {
     let elig = check_requirements(meta);
 
     let config = moltis_config::discover_and_load();
-    let enabled = meta
-        .category
-        .as_deref()
-        .is_none_or(|cat| !config.skills.disabled_bundled_categories.iter().any(|c| c == cat));
+    let enabled = meta.category.as_deref().is_none_or(|cat| {
+        !config
+            .skills
+            .disabled_bundled_categories
+            .iter()
+            .any(|c| c == cat)
+    });
 
     Ok(serde_json::json!({
         "name": meta.name,
@@ -1318,13 +1321,20 @@ fn toggle_bundled_skill(params: &Value, enabled: bool) -> ServiceResult {
         let category = skill
             .category
             .clone()
-            .ok_or_else(|| format!("bundled skill '{skill_name}' has no category"))?;;
+            .ok_or_else(|| format!("bundled skill '{skill_name}' has no category"))?;
 
         let cat_clone = category.clone();
         if let Err(e) = moltis_config::update_config(|cfg| {
             if enabled {
-                cfg.skills.disabled_bundled_categories.retain(|c| c != &cat_clone);
-            } else if !cfg.skills.disabled_bundled_categories.iter().any(|c| c == &cat_clone) {
+                cfg.skills
+                    .disabled_bundled_categories
+                    .retain(|c| c != &cat_clone);
+            } else if !cfg
+                .skills
+                .disabled_bundled_categories
+                .iter()
+                .any(|c| c == &cat_clone)
+            {
                 cfg.skills.disabled_bundled_categories.push(cat_clone);
             }
         }) {
@@ -1341,7 +1351,9 @@ fn toggle_bundled_skill(params: &Value, enabled: bool) -> ServiceResult {
             }),
         );
 
-        return Ok(serde_json::json!({ "source": "bundled", "skill": skill_name, "category": category, "enabled": enabled }));
+        return Ok(
+            serde_json::json!({ "source": "bundled", "skill": skill_name, "category": category, "enabled": enabled }),
+        );
     }
     #[cfg(not(feature = "bundled-skills"))]
     {
